@@ -2,7 +2,8 @@ package resource
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"math"
 	"net/http"
 	"regexp"
@@ -668,7 +669,7 @@ func withoutBucketLabels(series []map[string]string) []map[string]string {
 		for _, label := range histogramBucketLabels {
 			delete(stripped, label)
 		}
-		key, _ := json.Marshal(stripped) // map keys are sorted, so equal label sets give equal keys
+		key, _ := json.Marshal(stripped, json.Deterministic(true)) // deterministic: sorted map keys, so equal label sets give equal keys
 		if _, ok := seen[string(key)]; ok {
 			continue
 		}
@@ -1081,7 +1082,7 @@ func (h *Handlers) handleChartPlan(w http.ResponseWriter, r *http.Request) {
 	// the original MetricsExplorer behavior, switch low-frequency counters to an increase curve when
 	// more than half of the finite rate samples are below one.
 	counterFunc := counterFuncRate
-	var counterProbeData json.RawMessage
+	var counterProbeData jsontext.Value
 	if metricType == "counter" && isCounterFunc(req.RateMode) {
 		counterFunc = req.RateMode
 	} else if metricType == "counter" {
@@ -1216,10 +1217,10 @@ func (h *Handlers) autoStepSeconds(ctx context.Context, selector string, end tim
 // sampleIntervalSeconds returns the smallest gap, in whole seconds, between two consecutive raw
 // samples of any series in a matrix result, or 0 when no series has two samples. The smallest gap
 // is the sample interval; larger ones are missed scrapes.
-func sampleIntervalSeconds(data json.RawMessage) int64 {
+func sampleIntervalSeconds(data jsontext.Value) int64 {
 	var matrix struct {
 		Result []struct {
-			Values [][]json.RawMessage `json:"values"`
+			Values [][]jsontext.Value `json:"values"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(data, &matrix); err != nil {
@@ -1333,11 +1334,11 @@ func buildChartQuery(metricType, selector, window, counterFunc string) (query, a
 	}
 }
 
-func shouldUsePerMinute(data json.RawMessage) bool {
+func shouldUsePerMinute(data jsontext.Value) bool {
 	var matrix struct {
 		Result []struct {
-			Values [][]json.RawMessage `json:"values"`
-			Value  []json.RawMessage   `json:"value"`
+			Values [][]jsontext.Value `json:"values"`
+			Value  []jsontext.Value   `json:"value"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(data, &matrix); err != nil {
@@ -1346,7 +1347,7 @@ func shouldUsePerMinute(data json.RawMessage) bool {
 
 	total := 0
 	belowOne := 0
-	countSample := func(sample []json.RawMessage) {
+	countSample := func(sample []jsontext.Value) {
 		if len(sample) < 2 {
 			return
 		}
@@ -1373,11 +1374,11 @@ func shouldUsePerMinute(data json.RawMessage) bool {
 // sumRangeValues adds every finite value in a VictoriaMetrics range-query response. The chart
 // plan always produces one series for line charts, but iterating all results keeps this helper
 // correct if an upstream response contains more than one series.
-func sumRangeValues(data json.RawMessage) (float64, int) {
+func sumRangeValues(data jsontext.Value) (float64, int) {
 	var matrix struct {
 		Result []struct {
-			Values [][]json.RawMessage `json:"values"`
-			Value  []json.RawMessage   `json:"value"`
+			Values [][]jsontext.Value `json:"values"`
+			Value  []jsontext.Value   `json:"value"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(data, &matrix); err != nil {
@@ -1386,7 +1387,7 @@ func sumRangeValues(data json.RawMessage) (float64, int) {
 
 	sum := 0.0
 	count := 0
-	addSample := func(sample []json.RawMessage) {
+	addSample := func(sample []jsontext.Value) {
 		if len(sample) < 2 {
 			return
 		}
@@ -1411,7 +1412,7 @@ func sumRangeValues(data json.RawMessage) (float64, int) {
 	return sum, count
 }
 
-func parsePrometheusValue(raw json.RawMessage) (float64, bool) {
+func parsePrometheusValue(raw jsontext.Value) (float64, bool) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
 		value, parseErr := strconv.ParseFloat(text, 64)

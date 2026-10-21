@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	json "encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -65,7 +65,7 @@ func (g *fakeGrafana) serve(w http.ResponseWriter, r *http.Request) {
 		for _, uid := range []string{"prom", "vm2", "vm1"} { // deliberately unsorted
 			list = append(list, g.datasources[uid])
 		}
-		_ = json.NewEncoder(w).Encode(list)
+		_ = json.MarshalWrite(w, list)
 	case strings.HasPrefix(r.URL.Path, "/api/datasources/uid/"):
 		g.apiCalls.Add(1)
 		ds, ok := g.datasources[strings.TrimPrefix(r.URL.Path, "/api/datasources/uid/")]
@@ -73,7 +73,7 @@ func (g *fakeGrafana) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"message":"Data source not found"}`, http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(ds)
+		_ = json.MarshalWrite(w, ds)
 	case strings.HasPrefix(r.URL.Path, "/api/datasources/proxy/uid/"):
 		g.proxyCalls.Add(1)
 		if status := int(g.proxyStatus.Load()); status != 0 {

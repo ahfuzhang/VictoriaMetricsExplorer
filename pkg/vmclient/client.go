@@ -2,7 +2,8 @@ package vmclient
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -94,7 +95,7 @@ func New(cfg Config, lim *limits.Limits, obs *observability.Observability) (*Cli
 
 	httpClient := &http.Client{
 		Transport: transport,
-		Timeout:   60 * time.Second,
+		Timeout:   60 * time.Second, // todo: from config file
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// Never follow a redirect to another host: the bearer token must only go to Grafana.
 			if len(via) > 3 {
@@ -285,8 +286,8 @@ type metadataResponse struct {
 
 // queryResponse is the JSON response from /api/v1/query or /api/v1/query_range
 type queryResponse struct {
-	Status string          `json:"status"`
-	Data   json.RawMessage `json:"data"`
+	Status string         `json:"status"`
+	Data   jsontext.Value `json:"data"`
 }
 
 // LabelValues returns all values for a given label name, optionally restricted to the series
@@ -376,7 +377,7 @@ func (c *Client) Metadata(ctx context.Context, metric string) (map[string][]map[
 }
 
 // QueryRange executes a range query and returns the raw JSON data.
-func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step string) (json.RawMessage, error) {
+func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step string) (jsontext.Value, error) {
 	q := url.Values{}
 	q.Set("query", query)
 	q.Set("start", fmt.Sprintf("%d", start.Unix()))
@@ -394,7 +395,7 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 }
 
 // Query executes an instant query.
-func (c *Client) Query(ctx context.Context, query string, t time.Time) (json.RawMessage, error) {
+func (c *Client) Query(ctx context.Context, query string, t time.Time) (jsontext.Value, error) {
 	q := url.Values{}
 	q.Set("query", query)
 	if !t.IsZero() {

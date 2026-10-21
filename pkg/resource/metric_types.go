@@ -2,7 +2,8 @@ package resource
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -348,10 +349,10 @@ func (h *Handlers) inferMetricType(ctx context.Context, name string, start, end 
 }
 
 // allSamplesZero reports whether a query_range result has samples and every one of them is 0.
-func allSamplesZero(data json.RawMessage) bool {
+func allSamplesZero(data jsontext.Value) bool {
 	var matrix struct {
 		Result []struct {
-			Values [][]json.RawMessage `json:"values"`
+			Values [][]jsontext.Value `json:"values"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(data, &matrix); err != nil {
@@ -387,10 +388,10 @@ func metricTypeFromName(name string) (string, bool) {
 // classifyMatrix classifies a query_range result by the behavior of its series. Series are
 // judged one by one and the metric takes the most dynamic verdict: any fluctuating series makes
 // it a gauge, otherwise any growing series makes it a counter, otherwise it is a stat value.
-func classifyMatrix(data json.RawMessage) (string, error) {
+func classifyMatrix(data jsontext.Value) (string, error) {
 	var matrix struct {
 		Result []struct {
-			Values [][]json.RawMessage `json:"values"`
+			Values [][]jsontext.Value `json:"values"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(data, &matrix); err != nil {

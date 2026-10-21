@@ -1,7 +1,7 @@
 package resource
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"net/http/httptest"
 	"reflect"
 	"testing"
@@ -231,7 +231,7 @@ func TestHandleChartPlanUsesStatVisualizationForConstantMetric(t *testing.T) {
 }
 
 func TestShouldUsePerMinuteUsesMajorityOfFiniteSamples(t *testing.T) {
-	mostlySmall := json.RawMessage(`{
+	mostlySmall := jsontext.Value(`{
 		"resultType":"matrix",
 		"result":[{"values":[[1,"0.2"],[2,"0.4"],[3,"0.9"],[4,"2.0"],[5,"NaN"]]}]
 	}`)
@@ -239,7 +239,7 @@ func TestShouldUsePerMinuteUsesMajorityOfFiniteSamples(t *testing.T) {
 		t.Fatal("expected per-minute display when more than half of finite samples are below one")
 	}
 
-	exactlyHalf := json.RawMessage(`{
+	exactlyHalf := jsontext.Value(`{
 		"resultType":"matrix",
 		"result":[{"values":[[1,"0.2"],[2,"0.4"],[3,"1.0"],[4,"2.0"]]}]
 	}`)
@@ -249,7 +249,7 @@ func TestShouldUsePerMinuteUsesMajorityOfFiniteSamples(t *testing.T) {
 }
 
 func TestSumRangeValuesAddsEveryFiniteSample(t *testing.T) {
-	data := json.RawMessage(`{
+	data := jsontext.Value(`{
 		"resultType":"matrix",
 		"result":[
 			{"values":[[1,"1.5"],[2,"-0.5"],[3,"NaN"]]},
@@ -265,10 +265,10 @@ func TestSumRangeValuesAddsEveryFiniteSample(t *testing.T) {
 }
 
 func TestSumRangeValuesRejectsInvalidData(t *testing.T) {
-	if sum, count := sumRangeValues(json.RawMessage(`not-json`)); sum != 0 || count != 0 {
+	if sum, count := sumRangeValues(jsontext.Value(`not-json`)); sum != 0 || count != 0 {
 		t.Fatalf("invalid data must not produce a sum, got sum=%v count=%d", sum, count)
 	}
-	if sum, count := sumRangeValues(json.RawMessage(`{
+	if sum, count := sumRangeValues(jsontext.Value(`{
 		"result":[{"values":[[1,"1.7976931348623157e308"],[2,"1.7976931348623157e308"]]}]
 	}`)); sum != 0 || count != 0 {
 		t.Fatalf("an overflowing sum must be discarded, got sum=%v count=%d", sum, count)

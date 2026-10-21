@@ -1,14 +1,14 @@
 package resource
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"reflect"
 	"testing"
 	"time"
 )
 
 func TestBuildStatTable(t *testing.T) {
-	data := json.RawMessage(`{"result":[
+	data := jsontext.Value(`{"result":[
 		{"metric":{"__name__":"cfg","job":"api","zone":"a","pod":"api-1"},"value":[1,"3"]},
 		{"metric":{"__name__":"cfg","job":"api","zone":"b","pod":"api-2"},"value":[1,"3"]},
 		{"metric":{"__name__":"cfg","job":"api","zone":"a","pod":"api-3"},"value":[1,"3"]},
@@ -31,7 +31,7 @@ func TestBuildStatTable(t *testing.T) {
 }
 
 func TestBuildStatTableDropsLabelsSharedByEverySeries(t *testing.T) {
-	data := json.RawMessage(`{"result":[
+	data := jsontext.Value(`{"result":[
 		{"metric":{"cluster":"prod","job":"api"},"value":[1,"1"]},
 		{"metric":{"cluster":"prod","job":"web"},"value":[1,"2"]}
 	]}`)
@@ -51,7 +51,7 @@ func TestStatTableQueryCoversTheWholeRange(t *testing.T) {
 }
 
 func TestBuildStatTableCountsIndexedSeriesWithoutSamples(t *testing.T) {
-	data := json.RawMessage(`{"result":[
+	data := jsontext.Value(`{"result":[
 		{"metric":{"pod":"a"},"value":[1,"-1"]},
 		{"metric":{"pod":"b"},"value":[1,"-1"]}
 	]}`)

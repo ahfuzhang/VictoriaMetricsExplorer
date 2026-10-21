@@ -2,7 +2,8 @@ package resource
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"math"
 	"sort"
 	"strconv"
@@ -165,12 +166,12 @@ func vmrangeRows(samples []vectorSample) ([]histogramTableRow, float64) {
 }
 
 // parseVector reads the finite samples of an instant-query vector result.
-func parseVector(data json.RawMessage) []vectorSample {
+func parseVector(data jsontext.Value) []vectorSample {
 	var vector struct {
 		Result []struct {
-			Metric map[string]string
-			Value  []json.RawMessage
-		}
+			Metric map[string]string `json:"metric"`
+			Value  []jsontext.Value  `json:"value"`
+		} `json:"result"`
 	}
 	if err := json.Unmarshal(data, &vector); err != nil {
 		return nil

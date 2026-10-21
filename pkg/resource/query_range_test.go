@@ -1,7 +1,7 @@
 package resource
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +39,7 @@ func TestRangeQueryStep(t *testing.T) {
 }
 
 func TestParseRangeSeries(t *testing.T) {
-	data := json.RawMessage(`{"resultType":"matrix","result":[
+	data := jsontext.Value(`{"resultType":"matrix","result":[
 		{"metric":{"le":"0.1"},"values":[[1700000000,"1.5"],[1700000060.5,"NaN"],[1700000120,"+Inf"]]},
 		{"metric":{"le":"+Inf"},"values":[[1700000000,"2"]]}
 	]}`)
@@ -59,7 +59,7 @@ func TestParseRangeSeries(t *testing.T) {
 	if series, truncated, _ := parseRangeSeries(data, 1); !truncated || len(series) != 1 {
 		t.Fatalf("expected truncation to 1 series, got %d (truncated=%v)", len(series), truncated)
 	}
-	if _, _, err := parseRangeSeries(json.RawMessage(`{"resultType":"vector","result":[]}`), 10); err == nil {
+	if _, _, err := parseRangeSeries(jsontext.Value(`{"resultType":"vector","result":[]}`), 10); err == nil {
 		t.Fatal("a vector result must be rejected")
 	}
 }

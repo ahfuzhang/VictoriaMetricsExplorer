@@ -2,7 +2,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -28,15 +29,15 @@ const maxGrafanaResponse = 8 << 20
 // datasourceInfo is the subset of Grafana's datasource model the app needs. Secrets are never
 // part of this response, and the URL is only used for change detection — it is not sent to the browser.
 type datasourceInfo struct {
-	ID        int64           `json:"id"`
-	UID       string          `json:"uid"`
-	OrgID     int64           `json:"orgId"`
-	Name      string          `json:"name"`
-	Type      string          `json:"type"`
-	URL       string          `json:"url"`
-	IsDefault bool            `json:"isDefault"`
-	Version   int             `json:"version"`
-	JSONData  json.RawMessage `json:"jsonData"`
+	ID        int64          `json:"id"`
+	UID       string         `json:"uid"`
+	OrgID     int64          `json:"orgId"`
+	Name      string         `json:"name"`
+	Type      string         `json:"type"`
+	URL       string         `json:"url"`
+	IsDefault bool           `json:"isDefault"`
+	Version   int            `json:"version"`
+	JSONData  jsontext.Value `json:"jsonData"`
 }
 
 var (

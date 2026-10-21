@@ -2,7 +2,8 @@ package resource
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -53,8 +54,8 @@ func TestMetricTypeFromName(t *testing.T) {
 }
 
 func TestClassifyMatrixTakesTheMostDynamicSeries(t *testing.T) {
-	matrix := func(series ...string) json.RawMessage {
-		return json.RawMessage(`{"resultType":"matrix","result":[` + strings.Join(series, ",") + `]}`)
+	matrix := func(series ...string) jsontext.Value {
+		return jsontext.Value(`{"resultType":"matrix","result":[` + strings.Join(series, ",") + `]}`)
 	}
 	flat := `{"metric":{"i":"a"},"values":[[1,"4"],[2,"4"],[3,"4"]]}`
 	growing := `{"metric":{"i":"b"},"values":[[1,"1"],[2,"2"],[3,"3"]]}`
@@ -64,7 +65,7 @@ func TestClassifyMatrixTakesTheMostDynamicSeries(t *testing.T) {
 
 	cases := []struct {
 		name string
-		data json.RawMessage
+		data jsontext.Value
 		want string
 	}{
 		{"no series", matrix(), metricTypeUnknown},
@@ -84,7 +85,7 @@ func TestClassifyMatrixTakesTheMostDynamicSeries(t *testing.T) {
 		}
 	}
 
-	if _, err := classifyMatrix(json.RawMessage(`{"result":`)); err == nil {
+	if _, err := classifyMatrix(jsontext.Value(`{"result":`)); err == nil {
 		t.Error("a truncated response must be an error, not a classification")
 	}
 }
@@ -386,7 +387,7 @@ func TestAllSamplesZero(t *testing.T) {
 		`{"result":[]}`: false, // no samples at all is not a zero value
 	}
 	for data, want := range cases {
-		if got := allSamplesZero(json.RawMessage(data)); got != want {
+		if got := allSamplesZero(jsontext.Value(data)); got != want {
 			t.Errorf("allSamplesZero(%s) = %v, want %v", data, got, want)
 		}
 	}

@@ -2,7 +2,8 @@ package resource
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"sort"
 	"time"
 
@@ -63,18 +64,18 @@ func seriesKey(labels map[string]string) string {
 			withoutName[name] = value
 		}
 	}
-	key, _ := json.Marshal(withoutName) // map keys are sorted, so equal label sets give equal keys
+	key, _ := json.Marshal(withoutName, json.Deterministic(true)) // deterministic: sorted map keys, so equal label sets give equal keys
 	return string(key)
 }
 
 // buildStatTable groups the series of an instant-query vector by value. indexed lists every series
 // the series index knows for the range; those missing from data form the no-data row.
-func buildStatTable(data json.RawMessage, indexed []map[string]string) *statTableResult {
+func buildStatTable(data jsontext.Value, indexed []map[string]string) *statTableResult {
 	var vector struct {
 		Result []struct {
-			Metric map[string]string
-			Value  []json.RawMessage
-		}
+			Metric map[string]string `json:"metric"`
+			Value  []jsontext.Value  `json:"value"`
+		} `json:"result"`
 	}
 	table := &statTableResult{Rows: []statTableRow{}}
 	if err := json.Unmarshal(data, &vector); err != nil {

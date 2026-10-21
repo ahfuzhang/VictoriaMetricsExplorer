@@ -1,7 +1,8 @@
 package resource
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"math"
 	"net/http"
@@ -131,12 +132,12 @@ func stepSeconds(step string) (int64, bool) {
 
 // parseRangeSeries converts a query_range "matrix" result into TimeSeries, keeping at most
 // maxSeries series.
-func parseRangeSeries(data json.RawMessage, maxSeries int) ([]*explorerpb.TimeSeries, bool, error) {
+func parseRangeSeries(data jsontext.Value, maxSeries int) ([]*explorerpb.TimeSeries, bool, error) {
 	var matrix struct {
 		ResultType string `json:"resultType"`
 		Result     []struct {
-			Metric map[string]string    `json:"metric"`
-			Values [][2]json.RawMessage `json:"values"`
+			Metric map[string]string   `json:"metric"`
+			Values [][2]jsontext.Value `json:"values"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(data, &matrix); err != nil {
