@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package explorer;
+
+option go_package = "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer;explorerpb";
+
+import "explorer/explorer.proto";
+
+// Entries of the backend's in-memory L1 cache that are not wire responses. Like everything else
+// they are stored as zstd-compressed protobuf (pkg/wire). Backend only: no TypeScript is generated.
+
+// PodGroupsCacheEntry is the pod label's values for one day-aligned range, grouped by workload.
+message PodGroupsCacheEntry {
+  string label = 1;
+  repeated PodGroup groups = 2;
+  bool partial = 3;
+}
+
+// NodeGroupsCacheEntry is the node label's values for one day-aligned range.
+message NodeGroupsCacheEntry {
+  string label = 1;
+  repeated string nodes = 2;
+  bool partial = 3;
+}
+
+// MetricTypeCacheEntry is the inferred type of one metric.
+message MetricTypeCacheEntry {
+  string type = 1;   // counter, gauge, histogram, stat_value
+  bool zero = 2;     // every sample in the window is 0
+}

@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=ahfuzhang-victoriametricsexplorer-app
+      - GF_PLUGINS_PLUGIN_ADMIN_ENABLED=true
+      # Official VictoriaMetrics datasource, installed synchronously before Grafana serves (kept in the grafana-data volume)
+      - GF_PLUGINS_PREINSTALL_SYNC=victoriametrics-metrics-datasource
+      # The app queries datasources with a Grafana-managed service account (declared in plugin.json "iam"),
+      # which needs both of these. It only works in org 1.
+      - GF_FEATURE_TOGGLES_ENABLE=accessControlOnCallResource,externalServiceAccounts
+      - GF_AUTH_MANAGED_SERVICE_ACCOUNTS_ENABLED=true
+    volumes:
+      - ./dist:/var/lib/grafana/plugins/ahfuzhang-victoriametricsexplorer-app
+      - ./provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - victoriametrics
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    ports:
+      - "8428:8428"
+    command:
+      - "-storageDataPath=/storage"
+      - "-retentionPeriod=30d"
+    volumes:
+      - vm-data:/storage
+    restart: unless-stopped
+
+volumes:
+  grafana-data:
+  vm-data:

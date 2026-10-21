@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "name": "VictoriaMetrics Explorer",
+  "id": "ahfuzhang-victoriametricsexplorer-app",
+  "backend": true,
+  "executable": "gpx_victoriametricsexplorer",
+  "info": {
+    "keywords": ["app", "victoriametrics", "metrics", "explorer", "prometheus"],
+    "description": "Explore metrics from your existing VictoriaMetrics datasources without writing PromQL. Browse by metric, pod, or node.",
+    "author": {
+      "name": "ahfuzhang",
+      "url": "https://github.com/ahfuzhang"
+    },
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [
+      {
+        "name": "Website",
+        "url": "https://github.com/ahfuzhang/VictoriaMetricsExplorer"
+      }
+    ],
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "includes": [
+    {
+      "type": "page",
+      "name": "Explorer",
+      "path": "/a/ahfuzhang-victoriametricsexplorer-app",
+      "role": "Viewer",
+      "addToNav": true,
+      "defaultNav": true
+    }
+  ],
+  "iam": {
+    "permissions": [
+      { "action": "datasources:read", "scope": "datasources:*" },
+      { "action": "datasources:query", "scope": "datasources:*" }
+    ]
+  },
+  "dependencies": {
+    "grafanaDependency": ">=11.6.0",
+    "plugins": [
+      {
+        "id": "victoriametrics-metrics-datasource",
+        "type": "datasource",
+        "name": "VictoriaMetrics"
+      }
+    ]
+  }
+}

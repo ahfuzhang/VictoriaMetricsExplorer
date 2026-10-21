@@ -1,0 +1,479 @@
+syntax = "proto3";
+
+package explorer;
+
+option go_package = "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer;explorerpb";
+
+// Wire format of every Explorer endpoint, in both directions: the message serialized as protobuf
+// and then compressed with zstd, sent with
+//
+//   Content-Type: application/x-protobuf
+//   X-Payload-Encoding: zstd
+//
+// X-Payload-Encoding is used rather than Content-Encoding so neither the browser nor a proxy
+// decompresses the body on its own. GET endpoints take no body; a POST with an empty body is the
+// request message with every field at its default. Failures carry an Error with the HTTP status.
+
+// ============================================================================
+// Common
+// ============================================================================
+
+message SchemaVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+// TimeRange is an absolute time range; 0 means "not set" (the backend uses its default range).
+message TimeRange {
+  int64 start_ms = 1;  // Unix milliseconds
+  int64 end_ms = 2;    // Unix milliseconds
+}
+
+enum RangePrecision {
+  RANGE_PRECISION_UNSPECIFIED = 0;
+  RANGE_PRECISION_EXACT = 1;
+  RANGE_PRECISION_DAY = 2;
+  RANGE_PRECISION_APPROXIMATE = 3;
+}
+
+// ResponseMeta is included in every response; each endpoint fills the fields that apply to it.
+message ResponseMeta {
+  TimeRange requested_range = 1;
+  TimeRange effective_range = 2;
+  RangePrecision range_precision = 3;
+  bool truncated = 4;
+  bool partial = 5;
+  repeated string warnings = 6;
+  string request_id = 7;
+  uint64 elapsed_ms = 8;
+  bool cache_hit = 9;
+  uint32 total_count = 10;
+  uint32 returned_count = 11;
+}
+
+// Error is the body of every non-2xx response.
+message Error {
+  string code = 1;
+  string message = 2;
+  string request_id = 3;
+  bool retryable = 4;
+  map<string, string> details = 5;
+}
+
+// LabelFilter keeps series whose label `name` has one of `values`. Values of one label are OR'd,
+// different labels are AND'd.
+message LabelFilter {
+  string name = 1;
+  repeated string values = 2;
+}
+
+// ============================================================================
+// Datasources  (GET /explorer/v1/datasources)
+// ============================================================================
+
+message DatasourceInfo {
+  string uid = 1;
+  string name = 2;
+  string type = 3;
+  bool is_default = 4;
+}
+
+message DatasourcesResponse {
+  repeated DatasourceInfo datasources = 1;
+}
+
+// ============================================================================
+// Capabilities  (GET .../capabilities)
+// ============================================================================
+
+message LabelMapping {
+  string role = 1;        // pod, namespace, node, cluster
+  string label_name = 2;
+  float confidence = 3;   // 0.0-1.0
+  bool detected = 4;
+}
+
+message CapabilitiesResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  string upstream_version = 3;
+  string upstream_product = 4;   // "VictoriaMetrics", "VictoriaMetrics Cluster", etc.
+
+  bool supports_native_histogram = 5;
+  bool supports_metricsql = 6;
+
+  repeated LabelMapping label_mappings = 7;
+
+  // Effective limits
+  uint32 max_metric_names = 10;
+  uint32 max_series_scan = 11;
+  uint32 max_facet_values = 12;
+  uint32 max_chart_series = 13;
+  uint32 max_concurrent_requests = 14;
+
+  string knowledge_base_version = 15;
+}
+
+// ============================================================================
+// Metric Index  (POST .../metric-index)
+// ============================================================================
+
+enum GroupMode {
+  GROUP_MODE_UNSPECIFIED = 0;  // same as ALL
+  GROUP_MODE_ALL = 1;          // no grouping, sorted list
+  GROUP_MODE_PREFIX = 2;       // group by first underscore
+}
+
+message MetricIndexRequest {
+  TimeRange range = 1;
+  string search = 2;           // substring filter
+  GroupMode group_mode = 3;
+  string group = 4;            // selected group (empty = all)
+  uint32 page = 5;             // 1-based page number
+  uint32 page_size = 6;        // items per page
+  string sort = 7;             // "name", "name_desc"
+  repeated string metrics = 8; // optional allowlist, used by the Favorites scope
+  string pod_group = 9;        // optional pod group; keeps metrics with series from its pods
+  string node = 10;            // optional node; keeps metrics with series from that node
+}
+
+message MetricGroup {
+  string name = 1;
+  uint32 count = 2;
+}
+
+message MetricInfo {
+  // Name displayed by the metric picker; histogram suffixes are already removed.
+  string name = 1;
+  // Group name in prefix mode, empty otherwise.
+  string group = 2;
+  // Real metric name used by facet and chart queries (e.g. <base>_bucket for a histogram).
+  string query_metric = 3;
+  // Type known while building the index ("histogram" for collapsed histograms), empty otherwise.
+  string type = 4;
+}
+
+message MetricIndexResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  repeated MetricInfo metrics = 3;
+  repeated MetricGroup groups = 4;   // only filled in prefix mode
+  uint32 total_count = 5;
+  uint32 page = 6;
+  uint32 page_size = 7;
+  uint32 total_pages = 8;
+}
+
+// ============================================================================
+// Metric Types  (POST .../metric-types)
+// ============================================================================
+
+message MetricTypesRequest {
+  repeated string metrics = 1;
+  // Only chooses the window used to look up sibling names for histogram detection; the data used
+  // to infer counter/gauge/stat value is always the last hour.
+  TimeRange range = 2;
+}
+
+message MetricTypesResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  // Metric name -> "counter" | "gauge" | "histogram" | "stat_value" | "unknown".
+  map<string, string> types = 3;
+  // Metrics whose every sample in the last hour is 0 (stat values and counters).
+  map<string, bool> zero_values = 4;
+  // Number of metrics whose type query failed.
+  uint32 failed = 5;
+}
+
+// ============================================================================
+// Pod Groups / Node Groups  (POST .../pod-groups, POST .../node-groups)
+// ============================================================================
+
+message PodGroupsRequest {
+  TimeRange range = 1;
+}
+
+// PodGroup is one workload: the pods whose names share a prefix once generated suffixes are removed.
+message PodGroup {
+  string name = 1;
+  uint32 count = 2;
+  repeated string pods = 3;
+}
+
+message PodGroupsResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  string label = 3;            // the label holding pod names in this datasource
+  repeated PodGroup groups = 4;
+  uint32 pod_count = 5;
+}
+
+message NodeGroupsRequest {
+  TimeRange range = 1;
+}
+
+message NodeGroupsResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  string label = 3;            // the label holding node names in this datasource
+  repeated string nodes = 4;
+}
+
+// ============================================================================
+// Facets  (POST .../facets)
+// ============================================================================
+
+message FacetsRequest {
+  string metric = 1;
+  repeated LabelFilter filters = 2;  // current label choices
+  repeated string facet_labels = 3;  // labels to compute facets for (empty = all)
+  string pod_group = 4;              // optional pod prefix every series must match
+  string node = 5;                   // optional node every series must be on
+  string search = 6;
+  TimeRange range = 7;
+  uint32 max_values_per_facet = 8;
+}
+
+message FacetValue {
+  string value = 1;
+  uint32 count = 2;            // count in current result set
+  uint32 available_count = 3;  // count when applying other filters (exclude-self)
+}
+
+message Facet {
+  string label = 1;
+  repeated FacetValue values = 2;
+  uint32 total_values = 3;     // total distinct values (may exceed returned)
+  bool truncated = 4;          // values list was truncated
+  bool is_constant = 5;        // single value across all series
+  string constant_value = 6;   // value when is_constant
+  uint32 series_with_label = 7;
+  uint32 series_total = 8;
+}
+
+message FacetsResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  repeated Facet facets = 3;
+  // The pod-prefix matcher every series was selected with, e.g. pod=~"mahjong-ways-.*"; empty when none.
+  string pod_matcher = 4;
+  uint32 series_total = 5;
+  uint32 series_returned = 6;
+  bool counts_exact = 7;
+}
+
+// ============================================================================
+// Series  (POST .../series)
+// ============================================================================
+
+message SeriesRequest {
+  string metric = 1;
+  repeated string matches = 2;  // match[] selectors; used instead of metric when set
+  TimeRange range = 3;
+  uint32 limit = 4;
+}
+
+message Series {
+  map<string, string> labels = 1;
+}
+
+message SeriesResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+  repeated Series series = 3;
+}
+
+// ============================================================================
+// Metadata  (POST .../metadata)
+// ============================================================================
+
+message MetadataRequest {
+  string metric = 1;
+}
+
+message MetricMetadata {
+  string metric = 1;
+  string type = 2;             // counter, gauge, histogram, summary, unknown
+  string help = 3;
+  string unit = 4;
+  string source = 5;           // knowledge, metadata, naming, heuristic, unknown
+  float confidence = 6;        // 0.0-1.0
+}
+
+message MetadataResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+  repeated MetricMetadata items = 3;
+}
+
+// ============================================================================
+// Chart Plan  (POST .../chart-plan)
+// ============================================================================
+
+message ChartPlanRequest {
+  string metric = 1;
+  repeated LabelFilter filters = 2;
+  string pod_group = 3;
+  string node = 4;
+  TimeRange range = 5;
+  string step = 6;             // "auto", "15s", "1m", etc.
+  // Counter function to plot: rate, increase or irate. Empty lets the backend choose.
+  string rate_mode = 7;
+}
+
+message ChartPlan {
+  string metric = 1;
+  string metric_type = 2;          // counter, gauge, histogram, stat_value, ...
+  string metric_type_source = 3;   // metadata, naming, behavior
+  float metric_type_confidence = 4;
+  string unit = 5;
+  string query = 6;                // generated PromQL/MetricsQL
+  string rate_window = 7;          // e.g. "5m"
+  string step = 8;
+  string aggregation = 9;          // sum, avg, max, min, last, none
+  string visualization = 10;       // timeseries, heatmap, stat
+  uint32 max_series = 11;
+  repeated string warnings = 12;
+  repeated string alternatives = 13;
+}
+
+message ChartSummary {
+  double sum = 1;          // sum of all finite samples in the planned range query
+  uint64 sample_count = 2;
+}
+
+// One histogram bucket: the observations that fell in (from, to] over the chart's time range.
+message HistogramTableRow {
+  string from = 1;
+  string to = 2;
+  double count = 3;
+  // count / <base>_count x 100, or relative to the bucket total without a _count metric.
+  double percent = 4;
+  double cumulative_percent = 5;
+}
+
+message HistogramTable {
+  repeated HistogramTableRow rows = 1;
+  // Increase of <base>_count and <base>_sum over the time range; unset when the metric is absent.
+  optional double count = 2;
+  optional double sum = 3;
+  string window = 4;
+}
+
+// One distinct value of a stat-value metric.
+message StatTableRow {
+  string value = 1;
+  // Series the series index lists for the range but that have no sample in it; value is empty then.
+  bool no_data = 2;
+  // Labels every series with this value shares and that not all series share.
+  map<string, string> labels = 3;
+  uint32 series_count = 4;
+}
+
+message StatTable {
+  repeated StatTableRow rows = 1;
+  uint32 series_total = 2;
+  bool truncated = 3;
+}
+
+message ChartPlanResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+  ChartPlan plan = 3;
+  ChartSummary summary = 4;            // only for timeseries with finite samples
+  HistogramTable histogram_table = 5;  // only with a heatmap visualization
+  StatTable stat_table = 6;            // only for the stat-value type
+}
+
+// ============================================================================
+// Range Query  (POST .../query-range)
+//
+// Runs a PromQL/MetricsQL range query against the datasource (VictoriaMetrics /api/v1/query_range)
+// and returns its series; used to draw the chart planned by chart-plan.
+// ============================================================================
+
+message RangeQueryRequest {
+  string query = 1;
+  TimeRange range = 2;
+  // Step as a duration ("15s", "1m", ...). It is raised when the range would need more than
+  // max_data_points points per series; empty or malformed means 1m.
+  string step = 3;
+  uint32 max_data_points = 4;    // 0 means the backend default (11000)
+}
+
+// One series of a range query: timestamps_ms[i] is the time of values[i]. Values may be NaN or
+// +/-Inf as returned by the datasource.
+message TimeSeries {
+  map<string, string> labels = 1;
+  repeated int64 timestamps_ms = 2;
+  repeated double values = 3;
+}
+
+message RangeQueryResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;         // request_id, elapsed_ms, effective_range, truncated, returned_count
+  repeated TimeSeries series = 3;
+  string step = 4;               // the step actually used
+}
+
+// ============================================================================
+// Diagnostics / Cache  (GET .../diagnostics, GET .../cache, POST .../cache/purge)
+// ============================================================================
+
+message DiagnosticsResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  string plugin_version = 3;
+  string knowledge_base_version = 4;
+  string upstream_version = 5;
+  string health_status = 6;
+
+  uint32 max_metric_names = 7;
+  uint32 max_series_scan = 8;
+  uint32 max_facet_values = 9;
+  uint32 max_chart_series = 10;
+
+  uint64 cache_entries = 11;
+  uint64 cache_bytes = 12;
+  uint64 cache_hits = 13;
+  uint64 cache_misses = 14;
+  uint64 cache_evictions = 15;
+
+  bool compression_enabled = 16;
+  map<string, uint64> error_counts = 17;
+  uint64 upstream_requests = 18;
+  uint64 upstream_errors = 19;
+  double avg_upstream_latency_ms = 20;
+}
+
+message CacheStatsResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+
+  uint64 entries = 3;
+  uint64 total_bytes = 4;
+  uint64 max_entries = 5;
+  uint64 max_bytes = 6;
+  uint64 hits = 7;
+  uint64 misses = 8;
+  uint64 evictions = 9;
+  uint64 singleflight_merged = 10;
+}
+
+message CachePurgeRequest {
+  string prefix = 1;           // empty purges every entry of this datasource
+}
+
+message CachePurgeResponse {
+  SchemaVersion schema = 1;
+  ResponseMeta meta = 2;
+  uint32 purged = 3;
+}

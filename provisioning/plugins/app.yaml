@@ -1,0 +1,21 @@
+apiVersion: 1
+
+apps:
+  - orgId: 1
+    type: ahfuzhang-victoriametricsexplorer-app
+    enabled: true
+    jsonData:
+      # Which VictoriaMetrics datasources the Explorer may query. Not set: every datasource of type
+      # victoriametrics-metrics-datasource in the organization is available (add yours in Grafana).
+      # The Explorer queries them with its own service account, so Grafana's per-user datasource
+      # permissions are not enforced by the backend; to bound what Explorer users can reach, list
+      # the datasource UIDs here:
+      # datasourceUids:
+      #   - <datasource-uid>
+      # Optional label mappings used for pod/node grouping and a default look-back window.
+      podLabel: pod
+      namespaceLabel: namespace
+      nodeLabel: node
+      clusterLabel: cluster
+      defaultTimeRange: 1h
+      cacheTTL: 2m
