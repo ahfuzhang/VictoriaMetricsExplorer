@@ -23,6 +23,7 @@ import {
   Button,
   ClipboardButton,
   GraphGradientMode,
+  LinkButton,
   LegendDisplayMode,
   LoadingPlaceholder,
   PointVisibility,
@@ -33,6 +34,7 @@ import {
   useStyles2,
   useTheme2,
 } from '@grafana/ui';
+import { config, getDataSourceSrv } from '@grafana/runtime';
 import { css } from '@emotion/css';
 
 import { ChartPlan, HistogramTable, StatTable } from '../model';
@@ -265,6 +267,17 @@ export const ChartPanel: React.FC<Props> = ({
           </ClipboardButton>
           <code className={styles.queryCode}>{plan.query}</code>
           <span className={styles.stepBadge}>step {plan.step}</span>
+          <LinkButton
+            size="sm"
+            variant="secondary"
+            icon="compass"
+            href={exploreUrl(datasourceUID, plan.query, plan.step, timeRange)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open PromQL expression in Grafana Explore"
+          >
+            Explore
+          </LinkButton>
         </div>
       )}
 
@@ -336,15 +349,30 @@ export const ChartPanel: React.FC<Props> = ({
             onChange={(mode) => setRateModeChoice({ metric, mode })}
           />
         )}
-        {plan && (
-          <span title={`Detected from ${plan.metricTypeSource}`}>
-            type confidence {Math.round(plan.metricTypeConfidence * 100)}%
-          </span>
-        )}
       </div>
     </div>
   );
 };
+
+// Grafana Explore URL with one pane holding the query on the same datasource, time range and step.
+// Relative ranges such as now-6h are kept as-is so Explore can still refresh them.
+function exploreUrl(datasourceUID: string, expr: string, step: string, timeRange: TimeRange): string {
+  const datasource = { type: getDataSourceSrv().getInstanceSettings(datasourceUID)?.type, uid: datasourceUID };
+  const rangeValue = (raw: TimeRange['raw']['from']) => (typeof raw === 'string' ? raw : String(raw.valueOf()));
+  const panes = {
+    explorer: {
+      datasource: datasourceUID,
+      queries: [{ refId: 'A', datasource, expr, interval: step, range: true, instant: false }],
+      range: { from: rangeValue(timeRange.raw.from), to: rangeValue(timeRange.raw.to) },
+    },
+  };
+  const params = new URLSearchParams({
+    schemaVersion: '1',
+    panes: JSON.stringify(panes),
+    orgId: String(config.bootData.user.orgId),
+  });
+  return `${config.appSubUrl}/explore?${params.toString()}`;
+}
 
 const Centered: React.FC<React.PropsWithChildren> = ({ children }) => {
   const styles = useStyles2(getStyles);
