@@ -33,23 +33,30 @@ export const TreeView: React.FC<Props> = ({
   const styles = useStyles2(getStyles);
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [metricCount, setMetricCount] = useState(0);
-  const [metricsExpanded, setMetricsExpanded] = useState(true);
+  // Branches start collapsed and only fetch their data once the user first expands them.
+  const [metricsExpanded, setMetricsExpanded] = useState(false);
+  const [metricsRequested, setMetricsRequested] = useState(false);
   const [podGroups, setPodGroups] = useState<PodGroup[]>([]);
   const [podLabel, setPodLabel] = useState('pod');
   const [podCount, setPodCount] = useState(0);
-  const [podsExpanded, setPodsExpanded] = useState(true);
-  const [podsLoading, setPodsLoading] = useState(true);
+  const [podsExpanded, setPodsExpanded] = useState(false);
+  const [podsRequested, setPodsRequested] = useState(false);
+  const [podsLoading, setPodsLoading] = useState(false);
   const [podsError, setPodsError] = useState('');
   const [nodes, setNodes] = useState<string[]>([]);
   const [nodeLabel, setNodeLabel] = useState('node');
-  const [nodesExpanded, setNodesExpanded] = useState(true);
-  const [nodesLoading, setNodesLoading] = useState(true);
+  const [nodesExpanded, setNodesExpanded] = useState(false);
+  const [nodesRequested, setNodesRequested] = useState(false);
+  const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState('');
   const [workspaceExpanded, setWorkspaceExpanded] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!metricsRequested) {
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError('');
@@ -82,9 +89,12 @@ export const TreeView: React.FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [datasourceUID, timeRange]);
+  }, [datasourceUID, timeRange, metricsRequested]);
 
   useEffect(() => {
+    if (!podsRequested) {
+      return;
+    }
     let cancelled = false;
     setPodsLoading(true);
     setPodsError('');
@@ -116,9 +126,12 @@ export const TreeView: React.FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [datasourceUID, timeRange]);
+  }, [datasourceUID, timeRange, podsRequested]);
 
   useEffect(() => {
+    if (!nodesRequested) {
+      return;
+    }
     let cancelled = false;
     setNodesLoading(true);
     setNodesError('');
@@ -148,7 +161,7 @@ export const TreeView: React.FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [datasourceUID, timeRange]);
+  }, [datasourceUID, timeRange, nodesRequested]);
 
   return (
     <nav
@@ -175,45 +188,15 @@ export const TreeView: React.FC<Props> = ({
 
       {!collapsed && (
         <div className={styles.tree} role="tree" aria-label="Metric scopes">
-          <div role="treeitem" aria-expanded={metricsExpanded}>
-            <button type="button" className={styles.branch} onClick={() => setMetricsExpanded((expanded) => !expanded)}>
-              <span className={styles.chevron}>{metricsExpanded ? '▾' : '▸'}</span>
-              <span>By Name</span>
-              <span className={styles.count}>{metricCount || '—'}</span>
-            </button>
-
-            {metricsExpanded && (
-              <div className={styles.children} role="group">
-                <TreeLeaf
-                  label="All metrics"
-                  count={metricCount}
-                  selected={scope.kind === 'all'}
-                  onClick={() => onScopeChange({ kind: 'all' })}
-                  styles={styles}
-                />
-                {loading && (
-                  <div className={styles.loading}>
-                    <LoadingPlaceholder text="Loading groups…" />
-                  </div>
-                )}
-                {!loading &&
-                  groups.map((group) => (
-                    <TreeLeaf
-                      key={group.name}
-                      label={group.name}
-                      count={group.count}
-                      selected={scope.kind === 'group' && scope.group === group.name}
-                      onClick={() => onScopeChange({ kind: 'group', group: group.name })}
-                      styles={styles}
-                      monospace
-                    />
-                  ))}
-              </div>
-            )}
-          </div>
-
           <div role="treeitem" aria-expanded={podsExpanded}>
-            <button type="button" className={styles.branch} onClick={() => setPodsExpanded((expanded) => !expanded)}>
+            <button
+              type="button"
+              className={styles.branch}
+              onClick={() => {
+                setPodsExpanded((expanded) => !expanded);
+                setPodsRequested(true);
+              }}
+            >
               <span className={styles.chevron}>{podsExpanded ? '▾' : '▸'}</span>
               <span>By Pod</span>
               <span className={styles.count} title={`${podCount} pods`}>
@@ -249,7 +232,14 @@ export const TreeView: React.FC<Props> = ({
           </div>
 
           <div role="treeitem" aria-expanded={nodesExpanded}>
-            <button type="button" className={styles.branch} onClick={() => setNodesExpanded((expanded) => !expanded)}>
+            <button
+              type="button"
+              className={styles.branch}
+              onClick={() => {
+                setNodesExpanded((expanded) => !expanded);
+                setNodesRequested(true);
+              }}
+            >
               <span className={styles.chevron}>{nodesExpanded ? '▾' : '▸'}</span>
               <span>By Node</span>
               <span className={styles.count} title={`${nodes.length} nodes`}>
@@ -274,6 +264,50 @@ export const TreeView: React.FC<Props> = ({
                       label={node}
                       selected={scope.kind === 'node' && scope.node === node}
                       onClick={() => onScopeChange({ kind: 'node', node })}
+                      styles={styles}
+                      monospace
+                    />
+                  ))}
+              </div>
+            )}
+          </div>
+
+          <div role="treeitem" aria-expanded={metricsExpanded}>
+            <button
+              type="button"
+              className={styles.branch}
+              onClick={() => {
+                setMetricsExpanded((expanded) => !expanded);
+                setMetricsRequested(true);
+              }}
+            >
+              <span className={styles.chevron}>{metricsExpanded ? '▾' : '▸'}</span>
+              <span>By Name</span>
+              <span className={styles.count}>{metricCount || '—'}</span>
+            </button>
+
+            {metricsExpanded && (
+              <div className={styles.children} role="group">
+                <TreeLeaf
+                  label="All metrics"
+                  count={metricCount}
+                  selected={scope.kind === 'all'}
+                  onClick={() => onScopeChange({ kind: 'all' })}
+                  styles={styles}
+                />
+                {loading && (
+                  <div className={styles.loading}>
+                    <LoadingPlaceholder text="Loading groups…" />
+                  </div>
+                )}
+                {!loading &&
+                  groups.map((group) => (
+                    <TreeLeaf
+                      key={group.name}
+                      label={group.name}
+                      count={group.count}
+                      selected={scope.kind === 'group' && scope.group === group.name}
+                      onClick={() => onScopeChange({ kind: 'group', group: group.name })}
                       styles={styles}
                       monospace
                     />
@@ -463,12 +497,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border: 0,
     borderRadius: theme.shape.radius.default,
     background: 'transparent',
-    color: theme.colors.text.secondary,
+    color: theme.colors.text.primary,
     cursor: 'pointer',
     textAlign: 'left',
     '&:hover': {
       background: theme.colors.action.hover,
-      color: theme.colors.text.primary,
     },
   }),
   leafSelected: css({
