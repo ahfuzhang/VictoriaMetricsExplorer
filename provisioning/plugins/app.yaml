@@ -19,3 +19,10 @@ apps:
       clusterLabel: cluster
       defaultTimeRange: 1h
       cacheTTL: 2m
+      # Capacity of the backend's in-memory cache, shared by all datasources. Memory is allocated as
+      # the cache fills. KB/MB/GB are 1024-based; a plain number is bytes; the minimum is 32MB.
+      localCacheSize: 1GB
+      # Timeout of each request the backend sends to a datasource (through Grafana's datasource
+      # proxy). Default 120s. Grafana's own [dataproxy] timeout (default 30s) also applies, so raise
+      # that too (GF_DATAPROXY_TIMEOUT) for a longer limit.
+      upstreamTimeout: 120s

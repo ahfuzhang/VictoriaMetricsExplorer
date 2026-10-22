@@ -120,9 +120,16 @@ func TestIsHistogramMemberNeedsAllThreeMetrics(t *testing.T) {
 	if isHistogramMember("a_bucket", known("a", "a_bucket")) {
 		t.Error("a_bucket next to a metric named a must stay apart")
 	}
-	// _count and _sum without any _bucket (a summary) are not a histogram either.
-	if isHistogramMember("a_count", known("a_count", "a_sum")) {
-		t.Error("a_count and a_sum without _bucket are not a histogram")
+	// _count and _sum without any _bucket are grouped as a histogram too.
+	if !isHistogramMember("a_count", known("a_count", "a_sum")) {
+		t.Error("a_count next to a_sum is part of a histogram")
+	}
+	if isHistogramMember("a_count", known("a_count")) {
+		t.Error("a_count alone is not a histogram")
+	}
+	// A summary with quantiles exports "a" itself, so its _count and _sum stay apart.
+	if isHistogramMember("a_sum", known("a", "a_count", "a_sum")) {
+		t.Error("a_sum next to a metric named a must stay apart")
 	}
 	if isHistogramMember("_sum", known("_bucket", "_count", "_sum")) {
 		t.Error("a metric named just a suffix has no base")
@@ -140,8 +147,15 @@ func TestBuildMetricIndexEntriesCollapsesHistogramMembers(t *testing.T) {
 		"go_gc_pauses_seconds_bucket",
 	})
 
-	if len(entries) != 5 {
-		t.Fatalf("expected two histograms plus three ordinary metrics, got %#v", entries)
+	if len(entries) != 4 {
+		t.Fatalf("expected three histograms plus one ordinary metric, got %#v", entries)
+	}
+	for _, entry := range entries {
+		if entry.Name == "summary_seconds_count" || entry.Name == "summary_seconds_sum" ||
+			(entry.Name == "summary_seconds" &&
+				(entry.MetricType != metricTypeHistogram || entry.QueryMetric != "summary_seconds_count")) {
+			t.Fatalf("a bucketless _count/_sum pair must collapse to its base name: %#v", entry)
+		}
 	}
 	for _, entry := range entries {
 		if entry.Name == "go_gc_pauses_seconds_bucket" ||
@@ -241,10 +255,10 @@ func metricTypesHarness(t *testing.T, names []string, series map[string]string) 
 		t.Fatal(err)
 	}
 	t.Cleanup(client.Close)
-	l1 := cache.NewL1(cache.L1Config{MaxEntries: 1000, MaxBytes: 1 << 20, DefaultTTL: time.Minute})
-	t.Cleanup(l1.Close)
+	c := cache.New(32 << 20)
+	t.Cleanup(c.Close)
 
-	return NewRouter(client, l1, lim, obs, cfg).handlers, &rangeQueries
+	return NewRouter(client, c.Scope(), lim, obs, cfg).handlers, &rangeQueries
 }
 
 func TestHandleMetricIndexReturnsHistogramDisplayNameAndQueryMetric(t *testing.T) {
@@ -298,7 +312,8 @@ func postMetricTypes(t *testing.T, h *Handlers, metrics ...string) (int, *explor
 func TestHandleMetricTypes(t *testing.T) {
 	names := []string{
 		"rpc_seconds_bucket", "rpc_seconds_count", "rpc_seconds_sum", // a histogram
-		"lonely_bucket", // _bucket without _count/_sum is still a histogram
+		"lonely_bucket",                      // _bucket without _count/_sum is still a histogram
+		"gc_seconds_count", "gc_seconds_sum", // _count and _sum without _bucket are a histogram too
 		"requests_total", "temperature_celsius", "build_info", "idle_gauge",
 	}
 	h, rangeQueries := metricTypesHarness(t, names, map[string]string{
@@ -310,7 +325,7 @@ func TestHandleMetricTypes(t *testing.T) {
 	})
 
 	body := []string{"rpc_seconds_bucket", "rpc_seconds_count", "rpc_seconds_sum", "lonely_bucket",
-		"requests_total", "temperature_celsius", "build_info", "idle_gauge", "requests_total", ""}
+		"gc_seconds_count", "gc_seconds_sum", "requests_total", "temperature_celsius", "build_info", "idle_gauge", "requests_total", ""}
 	code, resp := postMetricTypes(t, h, body...)
 	if code != http.StatusOK {
 		t.Fatalf("status %d", code)
@@ -321,6 +336,8 @@ func TestHandleMetricTypes(t *testing.T) {
 		"rpc_seconds_count":   metricTypeHistogram,
 		"rpc_seconds_sum":     metricTypeHistogram,
 		"lonely_bucket":       metricTypeHistogram,
+		"gc_seconds_count":    metricTypeHistogram,
+		"gc_seconds_sum":      metricTypeHistogram,
 		"requests_total":      metricTypeCounter,
 		"temperature_celsius": metricTypeGauge,
 		"build_info":          metricTypeStatValue,

@@ -4,14 +4,13 @@ import (
 	"context"
 	"net/http"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
-	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
 )
 
 const nodeGroupsCacheTTL = 2 * time.Minute
@@ -22,7 +21,10 @@ func (h *Handlers) nodeMatcher(node string) string {
 	if node == "" {
 		return ""
 	}
-	return h.nodeLabel() + "=" + strconv.Quote(node)
+	label := h.nodeLabel()
+	b := make([]byte, 0, len(label)+len("=")+quotedLen(node))
+	b = append(append(b, label...), '=')
+	return bytesutil.ToUnsafeString(appendQuoted(b, node))
 }
 
 func (h *Handlers) nodeLabel() string {
@@ -38,14 +40,15 @@ func (h *Handlers) loadNodeGroups(ctx context.Context, startTime, endTime time.T
 	dayEnd := endTime.Truncate(24 * time.Hour).Add(24 * time.Hour)
 	label := h.nodeLabel()
 
-	cacheKey := cache.CacheKey("node-groups-v2", h.router.config.UID, h.router.config.ConfigFingerprint,
-		label, dayStart.Format(time.RFC3339), dayEnd.Format(time.RFC3339))
-	if cached, ok := h.router.cache.Get(cacheKey); ok {
-		var result explorerpb.NodeGroupsCacheEntry
-		if err := wire.Decode(cached, &result); err == nil {
-			h.router.obs.RecordCacheHit()
-			return &result, nil
-		}
+	cfg := &h.router.config
+	key := make([]byte, 0, cache.KeySize("node-groups-v2", cfg.UID, cfg.ConfigFingerprint, label)+2*cache.MaxIntKeySize)
+	key = cache.AppendKey(key, "node-groups-v2", cfg.UID, cfg.ConfigFingerprint, label)
+	key = cache.AppendKeyInt(key, dayStart.Unix())
+	cacheKey := cache.HashKey(cache.AppendKeyInt(key, dayEnd.Unix()))
+	var cached explorerpb.NodeGroupsCacheEntry
+	if h.router.cache.Get(cacheKey, nodeGroupsCacheTTL, &cached) {
+		h.router.obs.RecordCacheHit()
+		return &cached, nil
 	}
 	h.router.obs.RecordCacheMiss()
 
@@ -61,9 +64,7 @@ func (h *Handlers) loadNodeGroups(ctx context.Context, startTime, endTime time.T
 	}
 	sort.Strings(nodes)
 	result := &explorerpb.NodeGroupsCacheEntry{Label: label, Nodes: nodes, Partial: isPartial}
-	if data, err := wire.Encode(result); err == nil {
-		h.router.cache.Set(cacheKey, data, nodeGroupsCacheTTL)
-	}
+	h.router.cache.Set(cacheKey, result)
 	return result, nil
 }
 

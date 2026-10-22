@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 )
 
@@ -43,17 +44,22 @@ func (h *Handlers) loadHistogramTable(
 	ctx context.Context, bucketMetric string, filters map[string][]string, podGroup, node string,
 	vmrange bool, start, end time.Time,
 ) (*histogramTableResult, error) {
-	base := strings.TrimSuffix(bucketMetric, "_bucket")
+	_, countMetric, sumMetric := histogramMemberNames(strings.TrimSuffix(bucketMetric, "_bucket"))
 	seconds := int64(end.Sub(start).Seconds())
 	if seconds < 1 {
 		seconds = 1
 	}
 	window := formatStep(seconds)
-	selector := func(metric string) string {
-		return withMatcher(withMatcher(buildMetricSelector(metric, filters), h.podGroupMatcher(podGroup)), h.nodeMatcher(node))
-	}
+	labels := selectorLabels(filters)
+	matchers := []string{h.podGroupMatcher(podGroup), h.nodeMatcher(node)}
 	increase := func(by, metric string) ([]vectorSample, error) {
-		data, err := h.router.client.Query(ctx, "sum by ("+by+") (increase("+selector(metric)+"["+window+"]))", end)
+		const head, mid, tail = "sum by (", ") (increase(", "]))"
+		b := make([]byte, 0, len(head)+len(by)+len(mid)+metricSelectorLen(metric, filters, labels, matchers)+
+			len("[")+len(window)+len(tail))
+		b = append(append(append(b, head...), by...), mid...)
+		b = appendMetricSelector(b, metric, filters, labels, matchers)
+		b = append(append(append(b, '['), window...), tail...)
+		data, err := h.router.client.Query(ctx, bytesutil.ToUnsafeString(b), end)
 		if err != nil {
 			return nil, err
 		}
@@ -70,10 +76,10 @@ func (h *Handlers) loadHistogramTable(
 	}
 	table := &histogramTableResult{Window: window}
 	// _count and _sum are optional: without them the table still has its buckets.
-	if samples, err := increase("", base+"_count"); err == nil && len(samples) > 0 {
+	if samples, err := increase("", countMetric); err == nil && len(samples) > 0 {
 		table.Count = &samples[0].value
 	}
-	if samples, err := increase("", base+"_sum"); err == nil && len(samples) > 0 {
+	if samples, err := increase("", sumMetric); err == nil && len(samples) > 0 {
 		table.Sum = &samples[0].value
 	}
 

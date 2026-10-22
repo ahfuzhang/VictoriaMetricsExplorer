@@ -74,15 +74,36 @@ func TestPodPrefixMatcher(t *testing.T) {
 	}
 }
 
-func TestWithMatcher(t *testing.T) {
-	tests := []struct{ selector, matcher, want string }{
-		{"{}", `pod=~"a-.*"`, `{pod=~"a-.*"}`},
-		{`{__name__="up"}`, `pod=~"a-.*"`, `{__name__="up",pod=~"a-.*"}`},
-		{`{__name__="up"}`, "", `{__name__="up"}`},
+func TestLabelSelector(t *testing.T) {
+	tests := []struct {
+		matchers []string
+		want     string
+	}{
+		{nil, ""},
+		{[]string{"", ""}, ""},
+		{[]string{`pod=~"a-.*"`, ""}, `{pod=~"a-.*"}`},
+		{[]string{"", `node="n1"`}, `{node="n1"}`},
+		{[]string{`pod=~"a-.*"`, `node="n1"`}, `{pod=~"a-.*",node="n1"}`},
 	}
 	for _, tt := range tests {
-		if got := withMatcher(tt.selector, tt.matcher); got != tt.want {
-			t.Errorf("withMatcher(%s, %s) = %s, want %s", tt.selector, tt.matcher, got, tt.want)
+		if got := labelSelector(tt.matchers...); got != tt.want {
+			t.Errorf("labelSelector(%q) = %s, want %s", tt.matchers, got, tt.want)
+		}
+	}
+}
+
+func TestBuildMetricSelectorMatchers(t *testing.T) {
+	tests := []struct {
+		matchers []string
+		want     string
+	}{
+		{nil, `{__name__="up",job="api"}`},
+		{[]string{`pod=~"a-.*"`, ""}, `{__name__="up",job="api",pod=~"a-.*"}`},
+		{[]string{`pod=~"a-.*"`, `node="n1"`}, `{__name__="up",job="api",pod=~"a-.*",node="n1"}`},
+	}
+	for _, tt := range tests {
+		if got := buildMetricSelector("up", map[string][]string{"job": {"api"}}, tt.matchers...); got != tt.want {
+			t.Errorf("buildMetricSelector(up, job=api, %q) = %s, want %s", tt.matchers, got, tt.want)
 		}
 	}
 }

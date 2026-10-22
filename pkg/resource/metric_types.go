@@ -5,17 +5,15 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
-	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
 )
 
 // Metric types reported by the metric-types endpoint.
@@ -261,18 +259,16 @@ const zeroCounterBatch = 50
 // whose samples are all 0. Counters never go below 0, so that is a maximum of 0; one instant query
 // covers a whole batch of names.
 func (h *Handlers) zeroCounters(ctx context.Context, names []string, end time.Time) (map[string]bool, error) {
-	window := formatStep(int64(metricTypeWindow.Seconds()))
+	// keep_metric_names (VictoriaMetrics) keeps __name__ on the max_over_time result.
+	const head, tail = "max by (__name__) (max_over_time({__name__", "]) keep_metric_names)"
 	zero := make(map[string]bool)
 	for offset := 0; offset < len(names); offset += zeroCounterBatch {
 		batch := names[offset:min(offset+zeroCounterBatch, len(names))]
-		quoted := make([]string, len(batch))
-		for i, name := range batch {
-			quoted[i] = regexp.QuoteMeta(name)
-		}
-		// keep_metric_names (VictoriaMetrics) keeps __name__ on the max_over_time result.
-		query := "max by (__name__) (max_over_time({__name__=~" +
-			strconv.Quote("^(?:"+strings.Join(quoted, "|")+")$") + "}[" + window + "]) keep_metric_names)"
-		data, err := h.router.client.Query(ctx, query, end)
+		b := make([]byte, 0, len(head)+valuesMatchLen(batch)+len("}[")+maxStepLen+len(tail))
+		b = appendValuesMatch(append(b, head...), batch)
+		b = appendStep(append(b, "}["...), int64(metricTypeWindow.Seconds()))
+		b = append(b, tail...)
+		data, err := h.router.client.Query(ctx, bytesutil.ToUnsafeString(b), end)
 		if err != nil {
 			return nil, err
 		}
@@ -287,12 +283,8 @@ func (h *Handlers) zeroCounters(ctx context.Context, names []string, end time.Ti
 
 func (h *Handlers) cachedMetricType(name string) (metricTypeResult, bool) {
 	cacheKey := cache.CacheKey("metric-type-v2", h.router.config.UID, h.router.config.ConfigFingerprint, name)
-	cached, ok := h.router.cache.Get(cacheKey)
-	if !ok {
-		return metricTypeResult{}, false
-	}
 	var entry explorerpb.MetricTypeCacheEntry
-	if err := wire.Decode(cached, &entry); err != nil || entry.Type == "" {
+	if !h.router.cache.Get(cacheKey, metricTypeCacheTTL, &entry) || entry.Type == "" {
 		return metricTypeResult{}, false
 	}
 	return metricTypeResult{Type: entry.Type, Zero: entry.Zero}, true
@@ -300,9 +292,7 @@ func (h *Handlers) cachedMetricType(name string) (metricTypeResult, bool) {
 
 func (h *Handlers) cacheMetricType(name string, result metricTypeResult) {
 	cacheKey := cache.CacheKey("metric-type-v2", h.router.config.UID, h.router.config.ConfigFingerprint, name)
-	if data, err := wire.Encode(&explorerpb.MetricTypeCacheEntry{Type: result.Type, Zero: result.Zero}); err == nil {
-		h.router.cache.Set(cacheKey, data, metricTypeCacheTTL)
-	}
+	h.router.cache.Set(cacheKey, &explorerpb.MetricTypeCacheEntry{Type: result.Type, Zero: result.Zero})
 }
 
 // metricTypeForChart returns the same behavior-based type used by the metric picker. Usually the
@@ -311,6 +301,10 @@ func (h *Handlers) cacheMetricType(name string, result metricTypeResult) {
 func (h *Handlers) metricTypeForChart(ctx context.Context, name string) (string, error) {
 	if cached, ok := h.cachedMetricType(name); ok {
 		h.router.obs.RecordCacheHit()
+		// The _count or _sum of a histogram without buckets is charted as the counter it is.
+		if cached.Type == metricTypeHistogram && !strings.HasSuffix(name, "_bucket") {
+			return metricTypeCounter, nil
+		}
 		return cached.Type, nil
 	}
 	h.router.obs.RecordCacheMiss()
@@ -471,6 +465,19 @@ func histogramMetricBase(name string) (string, bool) {
 	return "", false
 }
 
+// histogramMemberNames returns the _bucket, _count and _sum metric names of the histogram base,
+// built in one allocation.
+func histogramMemberNames(base string) (bucket, count, sum string) {
+	b := make([]byte, 0, 3*len(base)+len("_bucket")+len("_count")+len("_sum"))
+	b = append(append(b, base...), "_bucket"...)
+	bucketEnd := len(b)
+	b = append(append(b, base...), "_count"...)
+	countEnd := len(b)
+	b = append(append(b, base...), "_sum"...)
+	names := bytesutil.ToUnsafeString(b)
+	return names[:bucketEnd], names[bucketEnd:countEnd], names[countEnd:]
+}
+
 func anyHistogramSuffix(names []string) bool {
 	for _, name := range names {
 		for _, suffix := range histogramSuffixes {
@@ -485,18 +492,24 @@ func anyHistogramSuffix(names []string) bool {
 // isHistogramMember reports whether name is one of the metrics of a histogram: "<base>_bucket",
 // or "<base>_count" / "<base>_sum" next to a "<base>_bucket" in known. The _count and _sum are
 // optional, since some exporters (e.g. Go runtime histograms from VictoriaMetrics/metrics) only
-// write buckets; _count and _sum without buckets are a summary. When "<base>" itself is a metric,
-// the members are left alone so the collapsed histogram does not share its name.
+// write buckets. A "<base>_count" and "<base>_sum" pair without buckets (e.g. a summary without
+// quantiles) is grouped the same way. When "<base>" itself is a metric (e.g. a summary's
+// quantiles), the members are left alone so the collapsed histogram does not share its name.
 func isHistogramMember(name string, known map[string]struct{}) bool {
 	base, ok := histogramMetricBase(name)
 	if !ok {
 		return false
 	}
-	if _, exists := known[base+"_bucket"]; !exists {
+	if _, baseIsMetric := known[base]; baseIsMetric {
 		return false
 	}
-	_, baseIsMetric := known[base]
-	return !baseIsMetric
+	bucket, count, sum := histogramMemberNames(base)
+	if _, exists := known[bucket]; exists {
+		return true
+	}
+	_, hasCount := known[count]
+	_, hasSum := known[sum]
+	return hasCount && hasSum
 }
 
 func uniqueNonEmpty(in []string) []string {

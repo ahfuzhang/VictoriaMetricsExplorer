@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 )
 
@@ -53,19 +54,31 @@ func statTableQuery(selector string, start, end time.Time) string {
 	if seconds < 1 {
 		seconds = 1
 	}
-	return "last_over_time(" + selector + "[" + formatStep(seconds) + "])"
+	const head, tail = "last_over_time(", "])"
+	b := make([]byte, 0, len(head)+len(selector)+len("[")+maxStepLen+len(tail))
+	b = append(append(b, head...), selector...)
+	b = appendStep(append(b, '['), seconds)
+	return bytesutil.ToUnsafeString(append(b, tail...))
 }
 
-// seriesKey identifies a series by its labels other than __name__, which query results drop.
-func seriesKey(labels map[string]string) string {
-	withoutName := make(map[string]string, len(labels))
+// labelsKey identifies a label set, leaving out the label skip: the name/value pairs in name order,
+// each name and value followed by a 0 byte.
+func labelsKey(labels map[string]string, skip string) string {
+	names := make([]string, 0, len(labels))
+	n := 0
 	for name, value := range labels {
-		if name != "__name__" {
-			withoutName[name] = value
+		if name != skip {
+			names = append(names, name)
+			n += len(name) + len(value) + 2
 		}
 	}
-	key, _ := json.Marshal(withoutName, json.Deterministic(true)) // deterministic: sorted map keys, so equal label sets give equal keys
-	return string(key)
+	sort.Strings(names)
+	b := make([]byte, 0, n)
+	for _, name := range names {
+		b = append(append(b, name...), 0)
+		b = append(append(b, labels[name]...), 0)
+	}
+	return bytesutil.ToUnsafeString(b)
 }
 
 // buildStatTable groups the series of an instant-query vector by value. indexed lists every series
@@ -103,19 +116,24 @@ func buildStatTable(data jsontext.Value, indexed []map[string]string) *statTable
 		all = append(all, labels)
 	}
 
+	// Series are matched by their labels other than __name__, which query results drop.
 	withValue := make(map[string]struct{}, len(all))
 	for _, labels := range all {
-		withValue[seriesKey(labels)] = struct{}{}
+		withValue[labelsKey(labels, "")] = struct{}{}
 	}
 	var noData []map[string]string
 	for _, labels := range indexed {
-		key := seriesKey(labels)
+		key := labelsKey(labels, "__name__")
 		if _, ok := withValue[key]; ok {
 			continue
 		}
 		withValue[key] = struct{}{} // the index may list a series more than once
-		var stripped map[string]string
-		_ = json.Unmarshal([]byte(key), &stripped)
+		stripped := make(map[string]string, len(labels))
+		for name, value := range labels {
+			if name != "__name__" {
+				stripped[name] = value
+			}
+		}
 		noData = append(noData, stripped)
 		all = append(all, stripped)
 	}

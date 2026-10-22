@@ -12,6 +12,7 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 )
 
@@ -144,7 +145,9 @@ func parseRangeSeries(data jsontext.Value, maxSeries int) ([]*explorerpb.TimeSer
 		return nil, false, err
 	}
 	if matrix.ResultType != "" && matrix.ResultType != "matrix" {
-		return nil, false, errors.New("unexpected result type " + strconv.Quote(matrix.ResultType))
+		const head = "unexpected result type "
+		msg := append(make([]byte, 0, len(head)+quotedLen(matrix.ResultType)), head...)
+		return nil, false, errors.New(bytesutil.ToUnsafeString(appendQuoted(msg, matrix.ResultType)))
 	}
 
 	truncated := len(matrix.Result) > maxSeries

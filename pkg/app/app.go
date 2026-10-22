@@ -3,9 +3,9 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -14,6 +14,7 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
@@ -71,7 +72,7 @@ func newApp(s *Settings, creds vmclient.CredentialsFunc) *App {
 	a.CallResourceHandler = httpadapter.New(mux)
 
 	log.DefaultLogger.Info("VictoriaMetrics Explorer app instance created",
-		"allowedDatasources", len(s.DatasourceUIDs))
+		"allowedDatasources", len(s.DatasourceUIDs), "localCacheMB", a.reg.cache.Stats().MaxBytes>>20)
 	return a
 }
 
@@ -90,10 +91,12 @@ func (a *App) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequest) (*
 			Message: "cannot list datasources with the plugin service account: " + friendlyError(err),
 		}, nil
 	}
-	n := len(a.filterDatasources(list))
+	const head, tail = "VictoriaMetrics Explorer is running; ", " VictoriaMetrics datasource(s) available"
+	msg := make([]byte, 0, len(head)+bytesutil.MaxIntLen+len(tail))
+	msg = strconv.AppendInt(append(msg, head...), int64(len(a.filterDatasources(list))), 10)
 	return &backend.CheckHealthResult{
 		Status:  backend.HealthStatusOk,
-		Message: fmt.Sprintf("VictoriaMetrics Explorer is running; %d VictoriaMetrics datasource(s) available", n),
+		Message: bytesutil.ToUnsafeString(append(msg, tail...)),
 	}, nil
 }
 
@@ -160,9 +163,11 @@ func (a *App) handleScoped(w http.ResponseWriter, r *http.Request) {
 func checkOrg(w http.ResponseWriter, r *http.Request) bool {
 	pCtx := backend.PluginConfigFromContext(r.Context())
 	if pCtx.OrgID != serviceAccountOrgID {
-		writeError(w, http.StatusForbidden, "unsupported_org",
-			fmt.Sprintf("the Explorer's service account only supports organization %d (this request is from organization %d)",
-				serviceAccountOrgID, pCtx.OrgID))
+		const head, mid = "the Explorer's service account only supports organization ", " (this request is from organization "
+		msg := make([]byte, 0, len(head)+len(mid)+len(")")+2*bytesutil.MaxIntLen)
+		msg = strconv.AppendInt(append(msg, head...), serviceAccountOrgID, 10)
+		msg = strconv.AppendInt(append(msg, mid...), pCtx.OrgID, 10)
+		writeError(w, http.StatusForbidden, "unsupported_org", bytesutil.ToUnsafeString(append(msg, ')')))
 		return false
 	}
 	return true

@@ -21,6 +21,69 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// CacheValue is how every value is stored in the local cache: the protobuf of the cached message
+// (a wire response or one of the entries below) and when it was written. The cache (fastcache)
+// has no expiry of its own, so readers compare written_at_ms with their TTL.
+type CacheValue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	WrittenAtMs   int64                  `protobuf:"varint,1,opt,name=written_at_ms,json=writtenAtMs,proto3" json:"written_at_ms,omitempty"` // unix milliseconds of the write
+	Zstd          bool                   `protobuf:"varint,2,opt,name=zstd,proto3" json:"zstd,omitempty"`                                    // payload is zstd-compressed, which it is when longer than 256 bytes
+	Payload       []byte                 `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CacheValue) Reset() {
+	*x = CacheValue{}
+	mi := &file_explorer_cache_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CacheValue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CacheValue) ProtoMessage() {}
+
+func (x *CacheValue) ProtoReflect() protoreflect.Message {
+	mi := &file_explorer_cache_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CacheValue.ProtoReflect.Descriptor instead.
+func (*CacheValue) Descriptor() ([]byte, []int) {
+	return file_explorer_cache_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *CacheValue) GetWrittenAtMs() int64 {
+	if x != nil {
+		return x.WrittenAtMs
+	}
+	return 0
+}
+
+func (x *CacheValue) GetZstd() bool {
+	if x != nil {
+		return x.Zstd
+	}
+	return false
+}
+
+func (x *CacheValue) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
 // PodGroupsCacheEntry is the pod label's values for one day-aligned range, grouped by workload.
 type PodGroupsCacheEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -33,7 +96,7 @@ type PodGroupsCacheEntry struct {
 
 func (x *PodGroupsCacheEntry) Reset() {
 	*x = PodGroupsCacheEntry{}
-	mi := &file_explorer_cache_proto_msgTypes[0]
+	mi := &file_explorer_cache_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -45,7 +108,7 @@ func (x *PodGroupsCacheEntry) String() string {
 func (*PodGroupsCacheEntry) ProtoMessage() {}
 
 func (x *PodGroupsCacheEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_explorer_cache_proto_msgTypes[0]
+	mi := &file_explorer_cache_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -58,7 +121,7 @@ func (x *PodGroupsCacheEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PodGroupsCacheEntry.ProtoReflect.Descriptor instead.
 func (*PodGroupsCacheEntry) Descriptor() ([]byte, []int) {
-	return file_explorer_cache_proto_rawDescGZIP(), []int{0}
+	return file_explorer_cache_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *PodGroupsCacheEntry) GetLabel() string {
@@ -94,7 +157,7 @@ type NodeGroupsCacheEntry struct {
 
 func (x *NodeGroupsCacheEntry) Reset() {
 	*x = NodeGroupsCacheEntry{}
-	mi := &file_explorer_cache_proto_msgTypes[1]
+	mi := &file_explorer_cache_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -106,7 +169,7 @@ func (x *NodeGroupsCacheEntry) String() string {
 func (*NodeGroupsCacheEntry) ProtoMessage() {}
 
 func (x *NodeGroupsCacheEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_explorer_cache_proto_msgTypes[1]
+	mi := &file_explorer_cache_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -119,7 +182,7 @@ func (x *NodeGroupsCacheEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeGroupsCacheEntry.ProtoReflect.Descriptor instead.
 func (*NodeGroupsCacheEntry) Descriptor() ([]byte, []int) {
-	return file_explorer_cache_proto_rawDescGZIP(), []int{1}
+	return file_explorer_cache_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *NodeGroupsCacheEntry) GetLabel() string {
@@ -154,7 +217,7 @@ type MetricTypeCacheEntry struct {
 
 func (x *MetricTypeCacheEntry) Reset() {
 	*x = MetricTypeCacheEntry{}
-	mi := &file_explorer_cache_proto_msgTypes[2]
+	mi := &file_explorer_cache_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -166,7 +229,7 @@ func (x *MetricTypeCacheEntry) String() string {
 func (*MetricTypeCacheEntry) ProtoMessage() {}
 
 func (x *MetricTypeCacheEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_explorer_cache_proto_msgTypes[2]
+	mi := &file_explorer_cache_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -179,7 +242,7 @@ func (x *MetricTypeCacheEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricTypeCacheEntry.ProtoReflect.Descriptor instead.
 func (*MetricTypeCacheEntry) Descriptor() ([]byte, []int) {
-	return file_explorer_cache_proto_rawDescGZIP(), []int{2}
+	return file_explorer_cache_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *MetricTypeCacheEntry) GetType() string {
@@ -200,7 +263,12 @@ var File_explorer_cache_proto protoreflect.FileDescriptor
 
 const file_explorer_cache_proto_rawDesc = "" +
 	"\n" +
-	"\x14explorer/cache.proto\x12\bexplorer\x1a\x17explorer/explorer.proto\"q\n" +
+	"\x14explorer/cache.proto\x12\bexplorer\x1a\x17explorer/explorer.proto\"^\n" +
+	"\n" +
+	"CacheValue\x12\"\n" +
+	"\rwritten_at_ms\x18\x01 \x01(\x03R\vwrittenAtMs\x12\x12\n" +
+	"\x04zstd\x18\x02 \x01(\bR\x04zstd\x12\x18\n" +
+	"\apayload\x18\x03 \x01(\fR\apayload\"q\n" +
 	"\x13PodGroupsCacheEntry\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12*\n" +
 	"\x06groups\x18\x02 \x03(\v2\x12.explorer.PodGroupR\x06groups\x12\x18\n" +
@@ -225,15 +293,16 @@ func file_explorer_cache_proto_rawDescGZIP() []byte {
 	return file_explorer_cache_proto_rawDescData
 }
 
-var file_explorer_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_explorer_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_explorer_cache_proto_goTypes = []any{
-	(*PodGroupsCacheEntry)(nil),  // 0: explorer.PodGroupsCacheEntry
-	(*NodeGroupsCacheEntry)(nil), // 1: explorer.NodeGroupsCacheEntry
-	(*MetricTypeCacheEntry)(nil), // 2: explorer.MetricTypeCacheEntry
-	(*PodGroup)(nil),             // 3: explorer.PodGroup
+	(*CacheValue)(nil),           // 0: explorer.CacheValue
+	(*PodGroupsCacheEntry)(nil),  // 1: explorer.PodGroupsCacheEntry
+	(*NodeGroupsCacheEntry)(nil), // 2: explorer.NodeGroupsCacheEntry
+	(*MetricTypeCacheEntry)(nil), // 3: explorer.MetricTypeCacheEntry
+	(*PodGroup)(nil),             // 4: explorer.PodGroup
 }
 var file_explorer_cache_proto_depIdxs = []int32{
-	3, // 0: explorer.PodGroupsCacheEntry.groups:type_name -> explorer.PodGroup
+	4, // 0: explorer.PodGroupsCacheEntry.groups:type_name -> explorer.PodGroup
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -253,7 +322,7 @@ func file_explorer_cache_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_explorer_cache_proto_rawDesc), len(file_explorer_cache_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

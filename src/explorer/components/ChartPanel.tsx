@@ -333,7 +333,7 @@ export const ChartPanel: React.FC<Props> = ({
         <HistogramTableView table={histogramTable} metric={metric} />
       )}
 
-      {visualization === 'stat' && statTable && !queryError && <StatTableView table={statTable} />}
+      {visualization === 'stat' && statTable && !queryError && <StatTableView table={statTable} metric={metric} />}
 
       <div className={styles.footer}>
         <span>
@@ -683,8 +683,12 @@ const StatView: React.FC<{ frames: DataFrame[]; metric: string; unit: string }> 
 
   const display = stat.field.display?.(stat.value);
   const prefix = display?.prefix ?? '';
-  const value = display?.text ?? new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(stat.value);
-  const suffix = display?.suffix || unit;
+  let value = display?.text ?? new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(stat.value);
+  let suffix = display?.suffix || unit;
+  if (isBytesMetric(metric)) {
+    [value, suffix] = scaleValue(stat.value, BYTE_UNITS);
+    suffix = ` ${suffix}`;
+  }
   const name = stat.field.config.displayName || stat.field.name || metric;
   const accessibleValue = [prefix, value, suffix].filter(Boolean).join(' ');
   const bigValue: DisplayValue = {
@@ -790,10 +794,15 @@ function bucketFormatter(metric: string): (bound: string) => string {
   if (base.endsWith('_seconds')) {
     return (bound) => formatScaledBound(bound, DURATION_UNITS);
   }
-  if (base.endsWith('_bytes')) {
+  if (isBytesMetric(base)) {
     return (bound) => formatScaledBound(bound, BYTE_UNITS);
   }
   return (bound) => bound;
+}
+
+// A stat or histogram whose name ends with "_bytes" is shown in B, KB, MB, GB and so on.
+function isBytesMetric(metric: string): boolean {
+  return metric.endsWith('_bytes');
 }
 
 // Units from largest to smallest; a bound takes the first unit it reaches, or the last one.
@@ -855,8 +864,11 @@ function percentileMarks(rows: HistogramTable['rows']): Map<number, Percentile[]
   return marks;
 }
 
-const StatTableView: React.FC<{ table: StatTable }> = ({ table }) => {
+const StatTableView: React.FC<{ table: StatTable; metric: string }> = ({ table, metric }) => {
   const styles = useStyles2(getStyles);
+  const formatValue = isBytesMetric(metric)
+    ? (value: string) => formatScaledBound(value, BYTE_UNITS)
+    : (value: string) => value;
 
   return (
     <div className={styles.dataTable}>
@@ -879,7 +891,7 @@ const StatTableView: React.FC<{ table: StatTable }> = ({ table }) => {
                       no samples in range
                     </span>
                   ) : (
-                    row.value
+                    <span title={row.value}>{formatValue(row.value)}</span>
                   )}
                 </td>
                 <td data-wrap>

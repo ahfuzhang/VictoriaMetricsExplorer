@@ -11,6 +11,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 )
 
@@ -66,18 +67,23 @@ func Decode(body []byte, msg proto.Message) error {
 	return nil
 }
 
+var errTooLarge = errors.New("request body is too large")
+
 // ReadRequest reads at most maxBytes of the request body and decodes it into msg.
 func ReadRequest(r *http.Request, maxBytes int, msg proto.Message) error {
 	// The SDK's httpadapter builds requests with a nil Body when the call carried none.
 	if r.Body == nil {
 		return Decode(nil, msg)
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, int64(maxBytes)+1))
+	if r.ContentLength > int64(maxBytes) {
+		return errTooLarge
+	}
+	body, err := bytesutil.ReadAll(io.LimitReader(r.Body, int64(maxBytes)+1), r.ContentLength)
 	if err != nil {
 		return err
 	}
 	if len(body) > maxBytes {
-		return errors.New("request body is too large")
+		return errTooLarge
 	}
 	return Decode(body, msg)
 }

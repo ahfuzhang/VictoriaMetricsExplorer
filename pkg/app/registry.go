@@ -6,12 +6,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/limits"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/observability"
@@ -22,14 +24,11 @@ import (
 const (
 	// defaultRevalidateEvery bounds how stale a target's view of its Grafana datasource can get. A
 	// config change (URL, tenant path, auth...) shows up as a new fingerprint, which rebuilds the
-	// target with an empty cache so entries from the old configuration are never served.
+	// target with an empty cache scope so entries from the old configuration are never served.
 	defaultRevalidateEvery = 30 * time.Second
 
-	// maxTargets caps live per-datasource caches/clients; the least recently used one is evicted.
+	// maxTargets caps live per-datasource clients; the least recently used one is evicted.
 	maxTargets = 32
-
-	// perTargetCacheBytes is the L1 cache budget of one datasource.
-	perTargetCacheBytes = 64 * 1024 * 1024
 )
 
 // target is everything the Explorer keeps for one (organization, datasource) pair.
@@ -38,16 +37,16 @@ type target struct {
 	fingerprint string
 	handler     http.Handler
 	client      *vmclient.Client
-	cache       *cache.L1Cache
 	obs         *observability.Observability
 
 	checkedAt atomic.Int64 // unix nanos of the last successful Grafana lookup
 	usedAt    atomic.Int64 // unix nanos of the last request
 }
 
+// close releases the target. Its cache entries need nothing: no other scope can reach them, and
+// they are overwritten as the cache fills.
 func (t *target) close() {
 	t.client.Close()
-	t.cache.Close()
 	t.obs.Close()
 }
 
@@ -57,6 +56,8 @@ type registry struct {
 	api      *grafanaAPI
 	creds    vmclient.CredentialsFunc
 	lim      *limits.Limits
+	// cache is shared by every target, each through its own scope.
+	cache *cache.Cache
 
 	revalidateEvery time.Duration
 
@@ -70,6 +71,7 @@ func newRegistry(settings *Settings, creds vmclient.CredentialsFunc) *registry {
 		api:      newGrafanaAPI(creds),
 		creds:    creds,
 		lim:      limits.Default(),
+		cache:    cache.New(settings.LocalCacheSize),
 
 		revalidateEvery: defaultRevalidateEvery,
 		targets:         map[string]*target{},
@@ -77,7 +79,8 @@ func newRegistry(settings *Settings, creds vmclient.CredentialsFunc) *registry {
 }
 
 func targetKey(orgID int64, uid string) string {
-	return fmt.Sprintf("%d/%s", orgID, uid)
+	b := strconv.AppendInt(make([]byte, 0, bytesutil.MaxIntLen+len("/")+len(uid)), orgID, 10)
+	return bytesutil.ToUnsafeString(append(append(b, '/'), uid...))
 }
 
 // get returns the target for a datasource, after checking that the datasource exists, is a
@@ -163,10 +166,26 @@ func (r *registry) evictLocked() {
 // outlive a datasource reconfiguration: org, uid, type, URL (which carries a cluster tenant
 // path), the saved-config version, jsonData, and this app's label mappings.
 func (r *registry) fingerprint(orgID int64, info *datasourceInfo) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "org=%d|uid=%s|type=%s|url=%s|ver=%d|%s|", orgID, info.UID, info.Type, info.URL, info.Version, r.settings.labelFingerprint())
-	h.Write(info.JSONData)
-	return hex.EncodeToString(h.Sum(nil))[:16]
+	s := r.settings
+	b := make([]byte, 0, len("org=|uid=|type=|url=|ver=|pod=|ns=|node=|cluster=|")+2*bytesutil.MaxIntLen+
+		len(info.UID)+len(info.Type)+len(info.URL)+len(s.PodLabel)+len(s.NamespaceLabel)+len(s.NodeLabel)+
+		len(s.ClusterLabel)+len(info.JSONData))
+	b = strconv.AppendInt(append(b, "org="...), orgID, 10)
+	b = append(append(b, "|uid="...), info.UID...)
+	b = append(append(b, "|type="...), info.Type...)
+	b = append(append(b, "|url="...), info.URL...)
+	b = strconv.AppendInt(append(b, "|ver="...), int64(info.Version), 10)
+	// The label mappings change what a cached response means.
+	b = append(append(b, "|pod="...), s.PodLabel...)
+	b = append(append(b, "|ns="...), s.NamespaceLabel...)
+	b = append(append(b, "|node="...), s.NodeLabel...)
+	b = append(append(b, "|cluster="...), s.ClusterLabel...)
+	b = append(append(b, '|'), info.JSONData...)
+
+	sum := sha256.Sum256(b)
+	fp := make([]byte, 16)
+	hex.Encode(fp, sum[:len(fp)/2])
+	return bytesutil.ToUnsafeString(fp)
 }
 
 func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target, error) {
@@ -182,28 +201,23 @@ func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target,
 		ClusterLabel:      r.settings.ClusterLabel,
 		DefaultTimeRange:  r.settings.DefaultTimeRange,
 		CacheTTL:          r.settings.CacheTTL,
+		Timeout:           r.settings.UpstreamTimeout,
 	}, r.lim, obs)
 	if err != nil {
 		obs.Close()
 		return nil, err
 	}
-	l1 := cache.NewL1(cache.L1Config{
-		MaxEntries: 10000,
-		MaxBytes:   perTargetCacheBytes,
-		DefaultTTL: r.settings.CacheTTL,
-	})
-	router := resource.NewRouter(client, l1, r.lim, obs, client.Config())
+	router := resource.NewRouter(client, r.cache.Scope(), r.lim, obs, client.Config())
 	return &target{
 		key:         targetKey(orgID, info.UID),
 		fingerprint: fp,
 		handler:     router.HTTPHandler(),
 		client:      client,
-		cache:       l1,
 		obs:         obs,
 	}, nil
 }
 
-// closeAll releases every target (app instance disposal).
+// closeAll releases every target and the cache (app instance disposal).
 func (r *registry) closeAll() {
 	r.mu.Lock()
 	targets := r.targets
@@ -212,4 +226,5 @@ func (r *registry) closeAll() {
 	for _, t := range targets {
 		t.close()
 	}
+	r.cache.Close()
 }

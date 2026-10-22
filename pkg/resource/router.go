@@ -21,18 +21,19 @@ import (
 // Router routes Resource API requests to the appropriate handler.
 type Router struct {
 	client   *vmclient.Client
-	cache    *cache.L1Cache
+	cache    *cache.Scope
 	limits   *limits.Limits
 	obs      *observability.Observability
 	config   vmclient.Config
 	handlers *Handlers
 }
 
-// NewRouter creates a new Resource API router.
-func NewRouter(client *vmclient.Client, l1cache *cache.L1Cache, lim *limits.Limits, obs *observability.Observability, config vmclient.Config) *Router {
+// NewRouter creates a new Resource API router. cacheScope is the datasource's share of the app's
+// local cache.
+func NewRouter(client *vmclient.Client, cacheScope *cache.Scope, lim *limits.Limits, obs *observability.Observability, config vmclient.Config) *Router {
 	r := &Router{
 		client: client,
-		cache:  l1cache,
+		cache:  cacheScope,
 		limits: lim,
 		obs:    obs,
 		config: config,

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,6 +161,10 @@ func viewer(orgID int64) backend.PluginContext {
 	return backend.PluginContext{OrgID: orgID, User: &backend.User{Login: "v", Role: "Viewer"}}
 }
 
+func admin() backend.PluginContext {
+	return backend.PluginContext{OrgID: 1, User: &backend.User{Login: "a", Role: "Admin"}}
+}
+
 func call(t *testing.T, a *App, pCtx backend.PluginContext, method, path string, body proto.Message) result {
 	t.Helper()
 	var payload []byte
@@ -265,9 +271,12 @@ func TestMetricIndexIsCachedPerDatasource(t *testing.T) {
 	}
 	afterFirst := g.proxyCalls.Load()
 
-	call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/vm1/metric-index", req)
+	second := call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/vm1/metric-index", req)
 	if g.proxyCalls.Load() != afterFirst {
 		t.Fatalf("second identical request should be served from cache")
+	}
+	if !proto.Equal(second.metricIndex(t), first.metricIndex(t)) {
+		t.Fatal("the cached response should decode to the original one")
 	}
 
 	// Same request against a different datasource must not be served from vm1's cache.
@@ -337,9 +346,56 @@ func TestCacheEndpointsRequireAdmin(t *testing.T) {
 			t.Fatalf("%s as Viewer: expected 403, got %d", path, res.status)
 		}
 	}
-	admin := backend.PluginContext{OrgID: 1, User: &backend.User{Login: "a", Role: "Admin"}}
-	if res := call(t, a, admin, http.MethodPost, "explorer/v1/ds/vm1/cache/purge", nil); res.status != http.StatusOK {
+	if res := call(t, a, admin(), http.MethodPost, "explorer/v1/ds/vm1/cache/purge", nil); res.status != http.StatusOK {
 		t.Fatalf("purge as Admin: expected 200, got %d: %s", res.status, res)
+	}
+}
+
+func TestCachePurgeDropsOnlyThatDatasource(t *testing.T) {
+	g := newFakeGrafana(t)
+	a := newTestApp(t, g, nil)
+
+	req := &explorerpb.MetricIndexRequest{Range: &explorerpb.TimeRange{StartMs: 1700000000000, EndMs: 1700003600000}}
+	// upstreamCalls makes a metric-index request and counts the datasource calls it took.
+	upstreamCalls := func(uid string) int64 {
+		t.Helper()
+		before := g.proxyCalls.Load()
+		if res := call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/"+uid+"/metric-index", req); res.status != http.StatusOK {
+			t.Fatalf("metric-index on %s: %d %s", uid, res.status, res)
+		}
+		return g.proxyCalls.Load() - before
+	}
+	upstreamCalls("vm1")
+	upstreamCalls("vm2")
+
+	if res := call(t, a, admin(), http.MethodPost, "explorer/v1/ds/vm1/cache/purge", &explorerpb.CachePurgeRequest{}); res.status != http.StatusOK {
+		t.Fatalf("purge: %d %s", res.status, res)
+	}
+	if upstreamCalls("vm1") == 0 {
+		t.Fatal("vm1's cache was purged, so its request should reach the datasource")
+	}
+	if n := upstreamCalls("vm2"); n != 0 {
+		t.Fatalf("purging vm1 should leave vm2's cache alone, yet vm2 made %d datasource calls", n)
+	}
+}
+
+func TestAppCacheHasTheConfiguredSize(t *testing.T) {
+	g := newFakeGrafana(t)
+	if got := newTestApp(t, g, nil).reg.cache.Stats().MaxBytes; got != 1<<30 {
+		t.Fatalf("default capacity %d, want 1GB", got)
+	}
+
+	s, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{"localCacheSize":"64MB"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t, g, s)
+	call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/vm1/capabilities", nil)
+
+	var stats explorerpb.CacheStatsResponse
+	call(t, a, admin(), http.MethodGet, "explorer/v1/ds/vm1/cache", nil).decode(t, &stats)
+	if stats.MaxBytes != 64<<20 || stats.Entries == 0 || stats.TotalBytes == 0 {
+		t.Fatalf("expected a 64MB cache holding the capabilities response, got %v", prototext.Format(&stats))
 	}
 }
 
@@ -438,17 +494,76 @@ func TestTargetsAreEvictedBeyondTheCap(t *testing.T) {
 
 func TestParseSettings(t *testing.T) {
 	s, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(
-		`{"datasourceUids":[" vm1 ","","vm2"],"podLabel":"pod_name","defaultTimeRange":"6h","cacheTTL":"5m"}`)})
+		`{"datasourceUids":[" vm1 ","","vm2"],"podLabel":"pod_name","defaultTimeRange":"6h","cacheTTL":"5m","upstreamTimeout":"45s"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(s.DatasourceUIDs) != 2 || s.DatasourceUIDs[0] != "vm1" || s.PodLabel != "pod_name" ||
-		s.DefaultTimeRange != 6*time.Hour || s.CacheTTL != 5*time.Minute || s.NodeLabel != "node" {
+		s.DefaultTimeRange != 6*time.Hour || s.CacheTTL != 5*time.Minute || s.NodeLabel != "node" ||
+		s.UpstreamTimeout != 45*time.Second {
 		t.Fatalf("unexpected settings: %+v", s)
 	}
-	for _, bad := range []string{`{"cacheTTL":"soon"}`, `{"defaultTimeRange":"-1h"}`, `{"datasourceUids":"vm1"}`} {
+	if s, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{}`)}); err != nil || s.UpstreamTimeout != 120*time.Second {
+		t.Fatalf("expected the 120s upstreamTimeout default, got %v (err=%v)", s, err)
+	}
+	for _, bad := range []string{`{"cacheTTL":"soon"}`, `{"defaultTimeRange":"-1h"}`, `{"datasourceUids":"vm1"}`, `{"upstreamTimeout":"0s"}`} {
 		if _, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(bad)}); err == nil {
 			t.Fatalf("expected %s to be rejected", bad)
 		}
+	}
+}
+
+func TestParseSettingsLocalCacheSize(t *testing.T) {
+	parse := func(value string) (*Settings, error) {
+		return ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{"localCacheSize":` + value + `}`)})
+	}
+
+	if s, err := ParseSettings(backend.AppInstanceSettings{}); err != nil || s.LocalCacheSize != 1<<30 {
+		t.Fatalf("expected the 1GB default, got %v (err=%v)", s, err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{`"1GB"`, 1 << 30},
+		{`"512MB"`, 512 << 20},
+		{`"512mib"`, 512 << 20},
+		{`"64M"`, 64 << 20},
+		{`" 2 gb "`, 2 << 30},
+		{`"1.5GB"`, 3 << 29},
+		{`"1TB"`, 1 << 40},
+		{`"1048576"`, 1 << 20},
+		{`1073741824`, 1 << 30}, // a YAML number is bytes
+		{`null`, 1 << 30},       // unset
+	} {
+		if s, err := parse(tc.value); err != nil || s.LocalCacheSize != tc.want {
+			t.Errorf("localCacheSize %s: got %v (err=%v), want %d", tc.value, s, err, tc.want)
+		}
+	}
+	for _, bad := range []string{
+		`""`, `"GB"`, `"big"`, `"0"`, `"0.5"`, `"-1GB"`, `"2TB"`, `"1PB"`, `"1.5.5GB"`, `"1 G B"`, `true`, `[1]`, `{}`,
+	} {
+		if _, err := parse(bad); err == nil {
+			t.Errorf("expected localCacheSize %s to be rejected", bad)
+		}
+	}
+}
+
+// The provisioning file is how Grafana hands the app its jsonData; its cache size must parse.
+func TestProvisionedLocalCacheSizeIsValid(t *testing.T) {
+	data, err := os.ReadFile("../../provisioning/plugins/app.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s+localCacheSize:\s*(\S+)\s*$`).FindSubmatch(data)
+	if m == nil {
+		t.Fatal("provisioning/plugins/app.yaml should set jsonData.localCacheSize")
+	}
+	value, err := json.Marshal(strings.Trim(string(m[1]), `"'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{"localCacheSize":` + string(value) + `}`)}); err != nil {
+		t.Fatalf("provisioned localCacheSize %s: %v", m[1], err)
 	}
 }

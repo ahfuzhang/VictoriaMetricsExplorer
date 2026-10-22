@@ -3,17 +3,15 @@ package resource
 import (
 	"context"
 	"net/http"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
-	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
 )
 
 const (
@@ -36,12 +34,14 @@ type podGroupEntry struct {
 // "mahjong-ways2". Segments are only removed from the end, and the first segment is always kept,
 // so names that merely contain digits ("ways2", "worker10") stay distinct workloads.
 func podPrefix(pod string) string {
-	segments := strings.Split(pod, "-")
-	end := len(segments)
-	for end > 1 && isGeneratedPodSegment(segments[end-1]) {
-		end--
+	end := len(pod)
+	for {
+		i := strings.LastIndexByte(pod[:end], '-')
+		if i < 0 || !isGeneratedPodSegment(pod[i+1:end]) {
+			return pod[:end]
+		}
+		end = i
 	}
-	return strings.Join(segments[:end], "-")
 }
 
 // isGeneratedPodSegment reports whether one '-'-separated segment of a pod name looks generated
@@ -106,19 +106,37 @@ func buildPodGroups(pods []string) []podGroupEntry {
 // podPrefixMatcher returns the label matcher selecting the series of one pod group by its prefix,
 // e.g. pod=~"mahjong-ways-.*".
 func podPrefixMatcher(label, prefix string) string {
-	return label + "=~" + strconv.Quote(regexp.QuoteMeta(prefix)+"-.*")
+	b := make([]byte, 0, len(label)+len(`=~"-.*"`)+escapedLen(prefix, true))
+	b = append(append(b, label...), `=~"`...)
+	b = appendEscaped(b, prefix, true)
+	return bytesutil.ToUnsafeString(append(b, `-.*"`...))
 }
 
-// withMatcher adds one label matcher to a "{...}" selector; an empty matcher leaves it unchanged.
-func withMatcher(selector, matcher string) string {
-	if matcher == "" {
-		return selector
+// labelSelector returns the selector made of matchers, e.g. {pod=~"web-.*",node="n1"}, leaving out
+// empty matchers; it is "" when every matcher is empty.
+func labelSelector(matchers ...string) string {
+	n := 0
+	for _, m := range matchers {
+		if m != "" {
+			n += len(",") + len(m)
+		}
 	}
-	body := strings.TrimSuffix(strings.TrimPrefix(selector, "{"), "}")
-	if body == "" {
-		return "{" + matcher + "}"
+	if n == 0 {
+		return ""
 	}
-	return "{" + body + "," + matcher + "}"
+	b := make([]byte, 0, n+len("}")) // '{' takes the place of the first ','
+	for _, m := range matchers {
+		if m == "" {
+			continue
+		}
+		if len(b) == 0 {
+			b = append(b, '{')
+		} else {
+			b = append(b, ',')
+		}
+		b = append(b, m...)
+	}
+	return bytesutil.ToUnsafeString(append(b, '}'))
 }
 
 // podGroupMatcher is podPrefixMatcher for the datasource's pod label, or "" without a pod group.
@@ -142,14 +160,15 @@ func (h *Handlers) loadPodGroups(ctx context.Context, startTime, endTime time.Ti
 	dayEnd := endTime.Truncate(24 * time.Hour).Add(24 * time.Hour)
 	label := h.podLabel()
 
-	cacheKey := cache.CacheKey("pod-groups-v2", h.router.config.UID, h.router.config.ConfigFingerprint,
-		label, dayStart.Format(time.RFC3339), dayEnd.Format(time.RFC3339))
-	if cached, ok := h.router.cache.Get(cacheKey); ok {
-		var result explorerpb.PodGroupsCacheEntry
-		if err := wire.Decode(cached, &result); err == nil {
-			h.router.obs.RecordCacheHit()
-			return &result, nil
-		}
+	cfg := &h.router.config
+	key := make([]byte, 0, cache.KeySize("pod-groups-v2", cfg.UID, cfg.ConfigFingerprint, label)+2*cache.MaxIntKeySize)
+	key = cache.AppendKey(key, "pod-groups-v2", cfg.UID, cfg.ConfigFingerprint, label)
+	key = cache.AppendKeyInt(key, dayStart.Unix())
+	cacheKey := cache.HashKey(cache.AppendKeyInt(key, dayEnd.Unix()))
+	var cached explorerpb.PodGroupsCacheEntry
+	if h.router.cache.Get(cacheKey, podGroupsCacheTTL, &cached) {
+		h.router.obs.RecordCacheHit()
+		return &cached, nil
 	}
 	h.router.obs.RecordCacheMiss()
 
@@ -161,9 +180,7 @@ func (h *Handlers) loadPodGroups(ctx context.Context, startTime, endTime time.Ti
 	for _, group := range buildPodGroups(pods) {
 		result.Groups = append(result.Groups, &explorerpb.PodGroup{Name: group.Name, Count: uint32(group.Count), Pods: group.Pods})
 	}
-	if data, err := wire.Encode(result); err == nil {
-		h.router.cache.Set(cacheKey, data, podGroupsCacheTTL)
-	}
+	h.router.cache.Set(cacheKey, result)
 	return result, nil
 }
 

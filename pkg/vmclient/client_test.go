@@ -21,7 +21,7 @@ func TestBuildURL(t *testing.T) {
 		name     string
 		baseURL  string
 		apiPath  string
-		query    map[string]string
+		query    string
 		expected string
 	}{
 		{
@@ -37,27 +37,17 @@ func TestBuildURL(t *testing.T) {
 			expected: "https://example.com/grafana/api/datasources/proxy/uid/vm-local/api/v1/query",
 		},
 		{
-			name:    "with query params",
-			baseURL: "http://grafana:3000",
-			apiPath: "/api/v1/label/__name__/values",
-			query: map[string]string{
-				"start": "1609459200",
-				"end":   "1609545600",
-			},
-			expected: "http://grafana:3000/api/datasources/proxy/uid/vm-local/api/v1/label/__name__/values?end=1609545600&start=1609459200",
+			name:     "with query params",
+			baseURL:  "http://grafana:3000",
+			apiPath:  "/api/v1/label/__name__/values",
+			query:    "start=1609459200&end=1609545600",
+			expected: "http://grafana:3000/api/datasources/proxy/uid/vm-local/api/v1/label/__name__/values?start=1609459200&end=1609545600",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var q url.Values
-			if tt.query != nil {
-				q = url.Values{}
-				for k, v := range tt.query {
-					q.Set(k, v)
-				}
-			}
-			if got := c.BuildURL(tt.baseURL, tt.apiPath, q); got != tt.expected {
+			if got := c.BuildURL(tt.baseURL, tt.apiPath, []byte(tt.query)); got != tt.expected {
 				t.Fatalf("expected %q, got %q", tt.expected, got)
 			}
 		})
@@ -188,54 +178,46 @@ func TestRedirectToAnotherHostIsBlocked(t *testing.T) {
 	}
 }
 
-func TestBuildSelector(t *testing.T) {
+func TestUpstreamErrorMessage(t *testing.T) {
 	tests := []struct {
-		name           string
-		metric         string
-		includeFilters map[string][]string
-		excludeFilters map[string][]string
-		expectContains []string
+		err  UpstreamError
+		want string
 	}{
-		{
-			name:           "metric only",
-			metric:         "http_requests_total",
-			includeFilters: nil,
-			excludeFilters: nil,
-			expectContains: []string{`__name__="http_requests_total"`},
-		},
-		{
-			name:   "with include filters",
-			metric: "cpu_usage",
-			includeFilters: map[string][]string{
-				"job":      {"node-exporter"},
-				"instance": {"host1", "host2"},
-			},
-			excludeFilters: nil,
-			expectContains: []string{`job="node-exporter"`, `instance=~`},
-		},
+		{UpstreamError{StatusCode: 500}, "upstream returned HTTP 500"},
+		{UpstreamError{StatusCode: 418, Path: "/api/v1/query", Body: "nope"}, "upstream returned HTTP 418 [/api/v1/query]: nope"},
+		{UpstreamError{StatusCode: 404, Body: "x"}, "datasource or endpoint not found (HTTP 404); check the datasource URL in Grafana: x"},
+		{UpstreamError{StatusCode: 503}, "grafana could not get an answer from the datasource's URL (HTTP 503); check that URL " +
+			"and that it is reachable from the Grafana server (inside Docker, localhost is the Grafana container itself)"},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := BuildSelector(tt.metric, tt.includeFilters, tt.excludeFilters)
-			for _, expected := range tt.expectContains {
-				if !contains(result, expected) {
-					t.Fatalf("expected selector to contain %q, got %q", expected, result)
-				}
-			}
-		})
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+		if got := tt.err.Error(); got != tt.want {
+			t.Errorf("Error() = %q, want %q", got, tt.want)
 		}
 	}
-	return false
+}
+
+func TestTruncateBody(t *testing.T) {
+	if got := TruncateBody([]byte("short"), 8); got != "short" {
+		t.Errorf("TruncateBody(short) = %q", got)
+	}
+	if got := TruncateBody([]byte("0123456789"), 4); got != "0123..." {
+		t.Errorf("TruncateBody(long) = %q", got)
+	}
+}
+
+func TestQueryParamsMatchURLValues(t *testing.T) {
+	values := []string{"", "up", `sum by (le) (rate({__name__="a.b",x=~"^(?:1|2)$"}[5m]))`, "a b+c&d=e/f?g#h%i", "héllo\x00\xff", "~-_."}
+	for _, v := range values {
+		want := url.Values{"match[]": {v}}.Encode()
+		q := make([]byte, 0, queryParamLen("match[]", v))
+		q = appendQueryParam(q, "match[]", v)
+		if string(q) != want || cap(q) != len(want)+len("&") {
+			t.Errorf("appendQueryParam(%q) = %s (cap %d), want %s", v, q, cap(q), want)
+		}
+	}
+	q := make([]byte, 0, intParamLen("start")+intParamLen("end"))
+	q = appendIntParam(appendIntParam(q, "start", -1<<63), "end", 1609545600)
+	if want := "start=-9223372036854775808&end=1609545600"; string(q) != want || len(q) > cap(q) {
+		t.Errorf("appendIntParam = %s, want %s", q, want)
+	}
 }

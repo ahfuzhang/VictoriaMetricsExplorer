@@ -6,8 +6,16 @@ option go_package = "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/expl
 
 import "explorer/explorer.proto";
 
-// Entries of the backend's in-memory L1 cache that are not wire responses. Like everything else
-// they are stored as zstd-compressed protobuf (pkg/wire). Backend only: no TypeScript is generated.
+// Messages of the backend's local cache (pkg/cache). Backend only: no TypeScript is generated.
+
+// CacheValue is how every value is stored in the local cache: the protobuf of the cached message
+// (a wire response or one of the entries below) and when it was written. The cache (fastcache)
+// has no expiry of its own, so readers compare written_at_ms with their TTL.
+message CacheValue {
+  int64 written_at_ms = 1;  // unix milliseconds of the write
+  bool zstd = 2;            // payload is zstd-compressed, which it is when longer than 256 bytes
+  bytes payload = 3;
+}
 
 // PodGroupsCacheEntry is the pod label's values for one day-aligned range, grouped by workload.
 message PodGroupsCacheEntry {

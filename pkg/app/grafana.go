@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
 
@@ -84,7 +85,7 @@ func (g *grafanaAPI) get(ctx context.Context, path string, target any) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGrafanaResponse))
+	body, err := bytesutil.ReadAll(io.LimitReader(resp.Body, maxGrafanaResponse), min(resp.ContentLength, maxGrafanaResponse))
 	if err != nil {
 		return fmt.Errorf("read grafana response: %w", err)
 	}
@@ -92,7 +93,7 @@ func (g *grafanaAPI) get(ctx context.Context, path string, target any) error {
 	case resp.StatusCode == http.StatusNotFound:
 		return errDatasourceNotFound
 	case resp.StatusCode >= 400:
-		return &vmclient.UpstreamError{StatusCode: resp.StatusCode, Body: truncate(string(body), 256)}
+		return &vmclient.UpstreamError{StatusCode: resp.StatusCode, Body: vmclient.TruncateBody(body, 256)}
 	}
 	if err := json.Unmarshal(body, target); err != nil {
 		return fmt.Errorf("decode grafana response: %w", err)
@@ -116,11 +117,4 @@ func (g *grafanaAPI) listDatasources(ctx context.Context) ([]datasourceInfo, err
 		return nil, err
 	}
 	return list, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

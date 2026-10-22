@@ -14,9 +14,16 @@ import (
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
+)
+
+const (
+	capabilitiesCacheTTL = 5 * time.Minute
+	// metricIndexCacheTTL is short because metric names can change.
+	metricIndexCacheTTL = 2 * time.Minute
 )
 
 // Handlers contains all the Resource API endpoint handlers.
@@ -46,7 +53,7 @@ func (h *Handlers) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	// Check cache first
 	cacheKey := cache.CacheKey("capabilities", h.router.config.UID, h.router.config.ConfigFingerprint)
-	if cached, ok := h.router.cache.Get(cacheKey); ok {
+	if cached, ok := h.router.cache.GetZstd(cacheKey, capabilitiesCacheTTL); ok {
 		h.router.obs.RecordCacheHit()
 		wire.Write(w, http.StatusOK, cached)
 		return
@@ -69,8 +76,7 @@ func (h *Handlers) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache for 5 minutes
-	h.router.cache.Set(cacheKey, data, 5*time.Minute)
+	h.router.cache.Set(cacheKey, resp)
 
 	elapsed := time.Since(started)
 	log.DefaultLogger.Info("capabilities",
@@ -178,8 +184,9 @@ func (h *Handlers) detectLabelMappings(ctx context.Context) ([]*explorerpb.Label
 
 // metricIndexEntry is one row in the metric picker. Name is exactly what the UI displays;
 // QueryMetric is the real metric used by facets and charts. A classic Prometheus histogram is
-// represented by its bucket metric for queries, but Name omits the _bucket suffix. Aliases keep
-// searches and favorite lookups for any of the original three member names working.
+// represented by its bucket metric (its _count without buckets) for queries, but Name omits the
+// suffix. Aliases keep searches and favorite lookups for any of the original three member names
+// working.
 type metricIndexEntry struct {
 	Name        string
 	QueryMetric string
@@ -202,11 +209,17 @@ func buildMetricIndexEntries(names []string) []metricIndexEntry {
 				continue
 			}
 			seenHistograms[base] = struct{}{}
+			bucket, count, sum := histogramMemberNames(base)
+			// A histogram without buckets is queried through its _count.
+			queryMetric := bucket
+			if _, hasBucket := known[bucket]; !hasBucket {
+				queryMetric = count
+			}
 			entries = append(entries, metricIndexEntry{
 				Name:        base,
-				QueryMetric: base + "_bucket",
+				QueryMetric: queryMetric,
 				MetricType:  metricTypeHistogram,
-				Aliases:     []string{base, base + "_bucket", base + "_count", base + "_sum"},
+				Aliases:     []string{base, bucket, count, sum},
 			})
 			continue
 		}
@@ -273,14 +286,8 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	startTime, endTime := h.timeRange(req.Range)
 
 	// Check cache
-	metricNamesForCache := append([]string(nil), req.Metrics...)
-	sort.Strings(metricNamesForCache)
-	cacheKey := cache.CacheKey("metric-index-v4", h.router.config.UID,
-		h.router.config.ConfigFingerprint, req.Search, strconv.FormatBool(prefixMode), req.Group, req.PodGroup, req.Node,
-		strings.Join(metricNamesForCache, "\x00"),
-		strconv.FormatUint(uint64(req.Page), 10), strconv.FormatUint(uint64(req.PageSize), 10), req.Sort,
-		startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-	if cached, ok := h.router.cache.Get(cacheKey); ok {
+	cacheKey := h.metricIndexCacheKey(&req, prefixMode, startTime, endTime)
+	if cached, ok := h.router.cache.GetZstd(cacheKey, metricIndexCacheTTL); ok {
 		h.router.obs.RecordCacheHit()
 		wire.Write(w, http.StatusOK, cached)
 		return
@@ -293,7 +300,7 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	dayEnd := endTime.Truncate(24 * time.Hour).Add(24 * time.Hour)
 
 	var matches []string
-	if selector := withMatcher(withMatcher("{}", h.podGroupMatcher(req.PodGroup)), h.nodeMatcher(req.Node)); selector != "{}" {
+	if selector := labelSelector(h.podGroupMatcher(req.PodGroup), h.nodeMatcher(req.Node)); selector != "" {
 		matches = []string{selector}
 	}
 
@@ -342,6 +349,7 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 			group := getPrefixGroup(entry.Name)
 			groupMap[group]++
 		}
+		groups = make([]*explorerpb.MetricGroup, 0, len(groupMap))
 		for name, count := range groupMap {
 			groups = append(groups, &explorerpb.MetricGroup{Name: name, Count: count})
 		}
@@ -432,8 +440,7 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache with short TTL (metric names can change)
-	h.router.cache.Set(cacheKey, data, 2*time.Minute)
+	h.router.cache.Set(cacheKey, resp)
 
 	log.DefaultLogger.Info("metric-index",
 		"uid", h.router.config.UID,
@@ -447,6 +454,26 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	)
 
 	wire.Write(w, http.StatusOK, data)
+}
+
+// metricIndexCacheKey is the cache key of a metric-index request. It sorts req.Metrics, whose
+// order does not matter.
+func (h *Handlers) metricIndexCacheKey(req *explorerpb.MetricIndexRequest, prefixMode bool, start, end time.Time) string {
+	cfg := &h.router.config
+	sort.Strings(req.Metrics)
+	b := make([]byte, 0, cache.KeySize("metric-index-v4", cfg.UID, cfg.ConfigFingerprint, req.Search, req.Group,
+		req.PodGroup, req.Node, req.Sort)+cache.MaxBoolKeySize+2*cache.MaxUintKeySize+2*cache.MaxIntKeySize+
+		cache.KeySize(req.Metrics...))
+	b = cache.AppendKey(b, "metric-index-v4", cfg.UID, cfg.ConfigFingerprint, req.Search, req.Group, req.PodGroup,
+		req.Node, req.Sort)
+	b = cache.AppendKeyBool(b, prefixMode)
+	b = cache.AppendKeyUint(b, uint64(req.Page))
+	b = cache.AppendKeyUint(b, uint64(req.PageSize))
+	b = cache.AppendKeyInt(b, start.Unix())
+	b = cache.AppendKeyInt(b, end.Unix())
+	// The list of metrics goes last, so it needs no count to keep it apart from the fields after it.
+	b = cache.AppendKey(b, req.Metrics...)
+	return cache.HashKey(b)
 }
 
 // getPrefixGroup extracts the prefix group from a metric name.
@@ -513,14 +540,23 @@ func (f facetResult) toProto() *explorerpb.Facet {
 }
 
 // labelFilters turns the request's label filters into label -> accepted values. Filters naming
-// the same label are merged.
+// the same label are merged. The values are sorted (in place: they are the request's own), so
+// equal filters give equal cache keys.
 func labelFilters(filters []*explorerpb.LabelFilter) map[string][]string {
 	if len(filters) == 0 {
 		return nil
 	}
 	out := make(map[string][]string, len(filters))
 	for _, f := range filters {
-		out[f.GetName()] = append(out[f.GetName()], f.GetValues()...)
+		if values, ok := out[f.GetName()]; ok {
+			// The full slice expression makes append copy, so the request's values stay untouched.
+			out[f.GetName()] = append(values[:len(values):len(values)], f.GetValues()...)
+		} else {
+			out[f.GetName()] = f.GetValues()
+		}
+	}
+	for _, values := range out {
+		sort.Strings(values)
 	}
 	return out
 }
@@ -551,22 +587,17 @@ func (h *Handlers) handleFacets(w http.ResponseWriter, r *http.Request) {
 	filters := labelFilters(req.Filters)
 
 	// Check cache
-	labelKeys := append([]string(nil), req.FacetLabels...)
-	sort.Strings(labelKeys)
-	cacheKey := cache.CacheKey("facets-v2", h.router.config.UID, h.router.config.ConfigFingerprint,
-		req.Metric, req.PodGroup, req.Node, filtersCacheKey(filters), strings.Join(labelKeys, ","), req.Search,
-		strconv.Itoa(maxValues),
-		startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
-	if cached, ok := h.router.cache.Get(cacheKey); ok {
+	cacheKey := h.facetsCacheKey(&req, filters, maxValues, startTime, endTime)
+	if cached, ok := h.router.cache.GetZstd(cacheKey, h.router.config.CacheTTL); ok {
 		h.router.obs.RecordCacheHit()
 		wire.Write(w, http.StatusOK, cached)
 		return
 	}
 	h.router.obs.RecordCacheMiss()
 
-	podMatcher := h.podGroupMatcher(req.PodGroup)
+	podMatcher, nodeMatcher := h.podGroupMatcher(req.PodGroup), h.nodeMatcher(req.Node)
 	fetchSeries := func(metric string) ([]map[string]string, bool, error) {
-		selector := withMatcher(withMatcher(buildMetricSelector(metric, nil), podMatcher), h.nodeMatcher(req.Node))
+		selector := buildMetricSelector(metric, nil, podMatcher, nodeMatcher)
 		return h.router.client.Series(r.Context(), []string{selector}, startTime, endTime, h.router.limits.MaxSeriesScan)
 	}
 
@@ -625,32 +656,43 @@ func (h *Handlers) handleFacets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.router.cache.Set(cacheKey, data, h.router.config.CacheTTL)
+	h.router.cache.Set(cacheKey, resp)
 	if truncated {
 		h.router.obs.RecordTruncation()
 	}
 	wire.Write(w, http.StatusOK, data)
 }
 
-// filtersCacheKey is a stable text form of label filters for cache keys.
-func filtersCacheKey(filters map[string][]string) string {
+// facetsCacheKey is the cache key of a facets request. filters come from labelFilters, so their
+// values are sorted; it sorts req.FacetLabels, whose order does not matter.
+func (h *Handlers) facetsCacheKey(req *explorerpb.FacetsRequest, filters map[string][]string, maxValues int, start, end time.Time) string {
+	cfg := &h.router.config
+	sort.Strings(req.FacetLabels)
 	labels := make([]string, 0, len(filters))
-	for label := range filters {
+	size := cache.KeySize("facets-v2", cfg.UID, cfg.ConfigFingerprint, req.Metric, req.PodGroup, req.Node, req.Search) +
+		3*cache.MaxIntKeySize + cache.MaxUintKeySize + cache.KeySize(req.FacetLabels...)
+	for label, values := range filters {
 		labels = append(labels, label)
+		size += cache.KeySize(label) + cache.MaxUintKeySize + cache.KeySize(values...)
 	}
 	sort.Strings(labels)
-	var b strings.Builder
+
+	b := make([]byte, 0, size)
+	b = cache.AppendKey(b, "facets-v2", cfg.UID, cfg.ConfigFingerprint, req.Metric, req.PodGroup, req.Node, req.Search)
+	b = cache.AppendKeyInt(b, int64(maxValues))
+	b = cache.AppendKeyInt(b, start.Unix())
+	b = cache.AppendKeyInt(b, end.Unix())
+	// Each label is followed by its number of values, which keeps one label's values apart from
+	// the next label.
+	b = cache.AppendKeyUint(b, uint64(len(labels)))
 	for _, label := range labels {
-		values := append([]string(nil), filters[label]...)
-		sort.Strings(values)
-		b.WriteString(strconv.Quote(label))
-		for _, v := range values {
-			b.WriteByte(',')
-			b.WriteString(strconv.Quote(v))
-		}
-		b.WriteByte(';')
+		b = cache.AppendKey(b, label)
+		b = cache.AppendKeyUint(b, uint64(len(filters[label])))
+		b = cache.AppendKey(b, filters[label]...)
 	}
-	return b.String()
+	// The facet labels go last, so they need no count.
+	b = cache.AppendKey(b, req.FacetLabels...)
+	return cache.HashKey(b)
 }
 
 // histogramBucketLabels are the labels that split one histogram series into its buckets.
@@ -669,11 +711,11 @@ func withoutBucketLabels(series []map[string]string) []map[string]string {
 		for _, label := range histogramBucketLabels {
 			delete(stripped, label)
 		}
-		key, _ := json.Marshal(stripped, json.Deterministic(true)) // deterministic: sorted map keys, so equal label sets give equal keys
-		if _, ok := seen[string(key)]; ok {
+		key := labelsKey(stripped, "")
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[string(key)] = struct{}{}
+		seen[key] = struct{}{}
 		result = append(result, stripped)
 	}
 	return result
@@ -779,8 +821,9 @@ func calculateFacets(
 		facetTruncated := limit > 0 && len(values) > limit
 		if facetTruncated {
 			// Keep active selections available even when they fall below the normal
-			// value limit, without moving them ahead of more frequent values.
-			visibleValues := append([]facetValueResult(nil), values[:limit]...)
+			// value limit, without moving them ahead of more frequent values. They are moved
+			// up in place: each lands at or before the position it is read from.
+			visibleValues := values[:limit]
 			for _, value := range values[limit:] {
 				if _, isSelected := selected[value.Value]; isSelected {
 					visibleValues = append(visibleValues, value)
@@ -1033,8 +1076,7 @@ func (h *Handlers) handleChartPlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate a selector that carries the label choices from the third column into the chart.
-	selector := withMatcher(withMatcher(buildMetricSelector(req.Metric, filters), h.podGroupMatcher(req.PodGroup)),
-		h.nodeMatcher(req.Node))
+	selector := buildMetricSelector(req.Metric, filters, h.podGroupMatcher(req.PodGroup), h.nodeMatcher(req.Node))
 
 	// Determine step
 	step := req.Step
@@ -1202,7 +1244,9 @@ const (
 // between the metric's raw samples in the hour before end, but at least one minute. When the
 // interval cannot be measured the step is one minute.
 func (h *Handlers) autoStepSeconds(ctx context.Context, selector string, end time.Time, requestID string) int64 {
-	data, err := h.router.client.Query(ctx, selector+"["+formatStep(int64(autoStepWindow.Seconds()))+"]", end)
+	b := make([]byte, 0, len(selector)+len("[]")+maxStepLen)
+	b = appendStep(append(append(b, selector...), '['), int64(autoStepWindow.Seconds()))
+	data, err := h.router.client.Query(ctx, bytesutil.ToUnsafeString(append(b, ']')), end)
 	if err != nil {
 		log.DefaultLogger.Debug("chart-plan: sample interval probe failed; using the minimum step",
 			"error", err, "selector", selector, "requestId", requestID)
@@ -1477,60 +1521,17 @@ var promLabelNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // buildMetricSelector turns the UI's filter model into a safe PromQL selector. Multiple values for
 // one label are ORed with an anchored regex; different labels remain separate matchers (AND).
-func buildMetricSelector(metric string, filters map[string][]string) string {
-	matchers := []string{"__name__=" + strconv.Quote(metric)}
-	keys := make([]string, 0, len(filters))
-	for key := range filters {
-		if key != "__name__" && promLabelNamePattern.MatchString(key) {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		values := filters[key]
-		if len(values) == 0 {
-			continue
-		}
-		if len(values) == 1 {
-			matchers = append(matchers, key+"="+strconv.Quote(values[0]))
-			continue
-		}
-
-		alternatives := make([]string, 0, len(values))
-		for _, value := range values {
-			alternatives = append(alternatives, regexp.QuoteMeta(value))
-		}
-		matchers = append(matchers, key+"=~"+strconv.Quote("^(?:"+strings.Join(alternatives, "|")+")$"))
-	}
-
-	return "{" + strings.Join(matchers, ",") + "}"
+// matchers, such as the pod group and node matchers, come last; empty ones are skipped.
+func buildMetricSelector(metric string, filters map[string][]string, matchers ...string) string {
+	labels := selectorLabels(filters)
+	b := make([]byte, 0, metricSelectorLen(metric, filters, labels, matchers))
+	return bytesutil.ToUnsafeString(appendMetricSelector(b, metric, filters, labels, matchers))
 }
 
 // formatStep formats whole seconds as a duration in the largest unit that keeps it exact, so a
 // 90s step stays 90s instead of becoming 1m.
 func formatStep(sec int64) string {
-	if sec >= 3600 && sec%3600 == 0 {
-		return formatInt(sec/3600) + "h"
-	}
-	if sec >= 60 && sec%60 == 0 {
-		return formatInt(sec/60) + "m"
-	}
-	return formatInt(sec) + "s"
-}
-
-func formatInt(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+	return bytesutil.ToUnsafeString(appendStep(make([]byte, 0, maxStepLen), sec))
 }
 
 // ============================================================================
@@ -1554,8 +1555,8 @@ func (h *Handlers) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		MaxSeriesScan:        uint32(h.router.limits.MaxSeriesScan),
 		MaxFacetValues:       uint32(h.router.limits.MaxFacetValues),
 		MaxChartSeries:       uint32(h.router.limits.MaxChartSeries),
-		CacheEntries:         uint64(cacheStats.Entries),
-		CacheBytes:           uint64(cacheStats.TotalBytes),
+		CacheEntries:         cacheStats.Entries,
+		CacheBytes:           cacheStats.TotalBytes,
 		CacheHits:            snap.CacheHits,
 		CacheMisses:          snap.CacheMisses,
 		CacheEvictions:       snap.CacheEvictions,
@@ -1575,16 +1576,16 @@ func (h *Handlers) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) handleCacheStats(w http.ResponseWriter, r *http.Request) {
 	requestID := generateRequestID()
+	// Sizes are of the local cache all datasources share; MaxEntries stays 0 as only bytes are bounded.
 	stats := h.router.cache.Stats()
 	snap := h.router.obs.Snapshot()
 
 	resp := &explorerpb.CacheStatsResponse{
 		Schema:             schemaV1(),
 		Meta:               &explorerpb.ResponseMeta{RequestId: requestID},
-		Entries:            uint64(stats.Entries),
-		TotalBytes:         uint64(stats.TotalBytes),
-		MaxEntries:         uint64(stats.MaxEntries),
-		MaxBytes:           uint64(stats.MaxBytes),
+		Entries:            stats.Entries,
+		TotalBytes:         stats.TotalBytes,
+		MaxBytes:           stats.MaxBytes,
 		Hits:               snap.CacheHits,
 		Misses:             snap.CacheMisses,
 		Evictions:          snap.CacheEvictions,
@@ -1602,13 +1603,13 @@ func (h *Handlers) handleCachePurge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// An empty prefix purges all entries for this datasource.
-	purged := h.router.cache.PurgeByPrefix(req.Prefix)
+	// Every entry of this datasource is purged, whatever the prefix: keys are hashed, and the local
+	// cache can neither enumerate nor count them, so Purged stays 0.
+	h.router.cache.Purge()
 
 	writeMessage(w, &explorerpb.CachePurgeResponse{
 		Schema: schemaV1(),
 		Meta:   &explorerpb.ResponseMeta{RequestId: requestID},
-		Purged: uint32(purged),
 	}, requestID)
 }
 
