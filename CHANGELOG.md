@@ -31,6 +31,10 @@
   value combination (`sum by (job, instance)`), with a legend naming each curve's label values and
   its min, max, mean and last. Only labels with more than one value among the series the label
   filters leave are offered; a label the filters reduce to one value is unpicked
+- Configuration page for a service-account token (`secureJsonData.serviceAccountToken`), used
+  instead of Grafana's managed service account. With it the Explorer works on Grafanas without the
+  `externalServiceAccounts` feature toggle and `[auth] managed_service_accounts_enabled`, and in
+  organizations other than 1. Save & test checks the token right away
 
 ### Changed
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
+	"github.com/grafana/grafana-plugin-sdk-go/config"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 
@@ -108,7 +109,7 @@ func newTestApp(t *testing.T, g *fakeGrafana, s *Settings) *App {
 	if s == nil {
 		s, _ = ParseSettings(backend.AppInstanceSettings{})
 	}
-	a := newApp(s, func(context.Context) (string, string, error) { return g.URL, testToken, nil })
+	a := newApp(s, func(context.Context) (string, string, error) { return g.URL, testToken, nil }, false)
 	t.Cleanup(a.Dispose)
 	return a
 }
@@ -401,22 +402,73 @@ func TestAppCacheHasTheConfiguredSize(t *testing.T) {
 
 func TestMissingServiceAccountGivesActionableError(t *testing.T) {
 	a := newApp(&Settings{DefaultTimeRange: time.Hour, CacheTTL: time.Minute},
-		func(context.Context) (string, string, error) { return "", "", vmclient.ErrNoServiceAccount })
+		func(context.Context) (string, string, error) { return "", "", vmclient.ErrNoServiceAccount }, false)
 	defer a.Dispose()
 
 	res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/datasources", nil)
 	if res.status != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d: %s", res.status, res)
 	}
-	if msg := res.errorBody(t).Message; !strings.Contains(msg, "externalServiceAccounts") {
-		t.Fatalf("message should tell the admin what to enable, got %q", msg)
+	msg := res.errorBody(t).Message
+	for _, want := range []string{"Configuration page", "externalServiceAccounts"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("message should tell the admin what to set (%q), got %q", want, msg)
+		}
+	}
+}
+
+// A token set in the app's secureJsonData replaces the managed service account; without one, the app
+// asks Grafana for the managed token.
+func TestNewAppPrefersTheConfiguredToken(t *testing.T) {
+	g := newFakeGrafana(t)
+	ctx := config.WithGrafanaConfig(context.Background(), config.NewGrafanaCfg(map[string]string{config.AppURL: g.URL}))
+	health := func(secure map[string]string) *backend.CheckHealthResult {
+		t.Helper()
+		inst, err := NewApp(ctx, backend.AppInstanceSettings{DecryptedSecureJSONData: secure})
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := inst.(*App)
+		defer a.Dispose()
+		got, err := a.CheckHealth(ctx, &backend.CheckHealthRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	if got := health(map[string]string{serviceAccountTokenKey: " " + testToken + "\n"}); got.Status != backend.HealthStatusOk {
+		t.Fatalf("the configured token should reach Grafana, got %+v", got)
+	}
+	if g.badTokens.Load() != 0 {
+		t.Fatalf("%d request(s) reached Grafana without the configured token", g.badTokens.Load())
+	}
+	for _, secure := range []map[string]string{nil, {serviceAccountTokenKey: "  "}} {
+		if got := health(secure); got.Status != backend.HealthStatusError || !strings.Contains(got.Message, "externalServiceAccounts") {
+			t.Fatalf("without a token (%v) the managed service account is required, got %+v", secure, got)
+		}
+	}
+}
+
+// The configured token belongs to the organization whose settings hold it, so it serves that
+// organization instead of being limited to org 1.
+func TestConfiguredTokenServesOtherOrganizations(t *testing.T) {
+	g := newFakeGrafana(t)
+	a := newApp(&Settings{DefaultTimeRange: time.Hour, CacheTTL: time.Minute},
+		func(context.Context) (string, string, error) { return g.URL, testToken, nil }, true)
+	defer a.Dispose()
+
+	for _, path := range []string{"explorer/v1/datasources", "explorer/v1/ds/vm1/capabilities"} {
+		if res := call(t, a, viewer(2), http.MethodGet, path, nil); res.status != http.StatusOK {
+			t.Fatalf("%s from org 2: expected 200, got %d: %s", path, res.status, res)
+		}
 	}
 }
 
 func TestRejectedServiceAccountIsReported(t *testing.T) {
 	g := newFakeGrafana(t)
 	a := newApp(&Settings{DefaultTimeRange: time.Hour, CacheTTL: time.Minute},
-		func(context.Context) (string, string, error) { return g.URL, "stale-token", nil })
+		func(context.Context) (string, string, error) { return g.URL, "stale-token", nil }, false)
 	defer a.Dispose()
 
 	res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/vm1/capabilities", nil)
@@ -464,7 +516,7 @@ func TestCheckHealth(t *testing.T) {
 		t.Fatalf("unexpected healthy result: %+v err=%v", got, err)
 	}
 
-	bad := newApp(&Settings{}, func(context.Context) (string, string, error) { return "", "", vmclient.ErrNoServiceAccount })
+	bad := newApp(&Settings{}, func(context.Context) (string, string, error) { return "", "", vmclient.ErrNoServiceAccount }, false)
 	defer bad.Dispose()
 	got, _ = bad.CheckHealth(context.Background(), &backend.CheckHealthRequest{})
 	if got.Status != backend.HealthStatusError || !strings.Contains(got.Message, "managed_service_accounts_enabled") {

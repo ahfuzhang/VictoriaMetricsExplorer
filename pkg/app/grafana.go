@@ -21,7 +21,8 @@ import (
 const vmDatasourceType = "victoriametrics-metrics-datasource"
 
 // serviceAccountOrgID is the only organization Grafana's managed plugin service accounts
-// can act in. Requests from any other org are refused rather than silently answered from org 1.
+// can act in. Without a token of its own, the app refuses requests from any other org rather
+// than silently answering them from org 1.
 const serviceAccountOrgID int64 = 1
 
 // maxGrafanaResponse bounds Grafana API responses read into memory.

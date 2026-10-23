@@ -43,6 +43,10 @@ type App struct {
 	settings *Settings
 	reg      *registry
 	api      *grafanaAPI
+	// ownToken is set when the app authenticates with the token from its own configuration.
+	// That token belongs to the organization the configuration belongs to, so unlike Grafana's
+	// managed service account (org 1 only) it serves every organization.
+	ownToken bool
 }
 
 var (
@@ -50,20 +54,31 @@ var (
 	_ backend.CheckHealthHandler    = (*App)(nil)
 )
 
-// NewApp creates a new app instance.
+// serviceAccountTokenKey is the secureJsonData key of the service-account token an admin can set
+// for Grafanas that do not give the plugin a managed service account.
+const serviceAccountTokenKey = "serviceAccountToken"
+
+// NewApp creates a new app instance. Grafana creates one per organization, with that
+// organization's settings.
 func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
 	s, err := ParseSettings(settings)
 	if err != nil {
 		return nil, err
 	}
-	return newApp(s, vmclient.GrafanaCredentials), nil
+	// A configured token wins over the managed service account: it is the admin's explicit choice,
+	// and the managed account would act in org 1 whatever organization this instance serves.
+	if token := strings.TrimSpace(settings.DecryptedSecureJSONData[serviceAccountTokenKey]); token != "" {
+		return newApp(s, vmclient.TokenCredentials(token), true), nil
+	}
+	return newApp(s, vmclient.GrafanaCredentials, false), nil
 }
 
-func newApp(s *Settings, creds vmclient.CredentialsFunc) *App {
+func newApp(s *Settings, creds vmclient.CredentialsFunc, ownToken bool) *App {
 	a := &App{
 		settings: s,
 		reg:      newRegistry(s, creds),
 		api:      newGrafanaAPI(creds),
+		ownToken: ownToken,
 	}
 
 	mux := http.NewServeMux()
@@ -71,7 +86,11 @@ func newApp(s *Settings, creds vmclient.CredentialsFunc) *App {
 	mux.HandleFunc(routeScoped, a.handleScoped)
 	a.CallResourceHandler = httpadapter.New(mux)
 
-	log.DefaultLogger.Info("VictoriaMetrics Explorer app instance created",
+	credentials := "managed service account"
+	if ownToken {
+		credentials = "configured service account token"
+	}
+	log.DefaultLogger.Info("VictoriaMetrics Explorer app instance created", "credentials", credentials,
 		"allowedDatasources", len(s.DatasourceUIDs), "localCacheMB", a.reg.cache.Stats().MaxBytes>>20)
 	return a
 }
@@ -115,7 +134,7 @@ func (a *App) filterDatasources(list []datasourceInfo) []datasourceInfo {
 // handleListDatasources returns the VictoriaMetrics datasources the Explorer can use. Only UID,
 // name and type are returned — never URLs or credentials.
 func (a *App) handleListDatasources(w http.ResponseWriter, r *http.Request) {
-	if !checkOrg(w, r) {
+	if !a.checkOrg(w, r) {
 		return
 	}
 	list, err := a.api.listDatasources(r.Context())
@@ -135,7 +154,7 @@ func (a *App) handleListDatasources(w http.ResponseWriter, r *http.Request) {
 // handleScoped routes /explorer/v1/ds/{uid}/{rest...} to the Explorer API of that datasource,
 // rewritten to /explorer/v1/{rest}.
 func (a *App) handleScoped(w http.ResponseWriter, r *http.Request) {
-	if !checkOrg(w, r) {
+	if !a.checkOrg(w, r) {
 		return
 	}
 	uid, rest := r.PathValue("uid"), r.PathValue("rest")
@@ -160,14 +179,15 @@ func (a *App) handleScoped(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkOrg refuses requests from organizations the plugin service account cannot act in.
-func checkOrg(w http.ResponseWriter, r *http.Request) bool {
+func (a *App) checkOrg(w http.ResponseWriter, r *http.Request) bool {
 	pCtx := backend.PluginConfigFromContext(r.Context())
-	if pCtx.OrgID != serviceAccountOrgID {
-		const head, mid = "the Explorer's service account only supports organization ", " (this request is from organization "
-		msg := make([]byte, 0, len(head)+len(mid)+len(")")+2*bytesutil.MaxIntLen)
+	if !a.ownToken && pCtx.OrgID != serviceAccountOrgID {
+		const head, mid = "the Explorer's managed service account only supports organization ", " (this request is from organization "
+		const tail = "); set a service account token of this organization on the app's Configuration page"
+		msg := make([]byte, 0, len(head)+len(mid)+len(tail)+2*bytesutil.MaxIntLen)
 		msg = strconv.AppendInt(append(msg, head...), serviceAccountOrgID, 10)
 		msg = strconv.AppendInt(append(msg, mid...), pCtx.OrgID, 10)
-		writeError(w, http.StatusForbidden, "unsupported_org", bytesutil.ToUnsafeString(append(msg, ')')))
+		writeError(w, http.StatusForbidden, "unsupported_org", bytesutil.ToUnsafeString(append(msg, tail...)))
 		return false
 	}
 	return true

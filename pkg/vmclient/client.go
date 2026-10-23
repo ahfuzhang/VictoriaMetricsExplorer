@@ -23,7 +23,8 @@ import (
 // ErrNoServiceAccount means Grafana did not hand the plugin a service-account token
 // (or its own URL), so the plugin cannot call back into Grafana.
 var ErrNoServiceAccount = errors.New("grafana did not provide a service account token to the plugin: " +
-	"enable the externalServiceAccounts feature toggle and auth.managed_service_accounts_enabled")
+	"set a service account token on the app's Configuration page (Administration > Plugins), or enable " +
+	"the externalServiceAccounts feature toggle and [auth] managed_service_accounts_enabled and restart Grafana")
 
 // CredentialsFunc returns the Grafana base URL and the service-account token used to
 // reach a datasource through Grafana. It is called for every upstream request because
@@ -34,15 +35,36 @@ type CredentialsFunc func(ctx context.Context) (baseURL, token string, err error
 // the managed service-account token that Grafana injects into the plugin request context.
 func GrafanaCredentials(ctx context.Context) (string, string, error) {
 	cfg := config.GrafanaConfigFromContext(ctx)
-	baseURL, err := cfg.AppURL()
-	if err != nil || baseURL == "" {
-		return "", "", fmt.Errorf("grafana app URL unavailable: %w", ErrNoServiceAccount)
+	baseURL, err := appURL(cfg)
+	if err != nil {
+		return "", "", err
 	}
 	token, err := cfg.PluginAppClientSecret()
 	if err != nil || token == "" {
 		return "", "", ErrNoServiceAccount
 	}
 	return baseURL, token, nil
+}
+
+// TokenCredentials returns a CredentialsFunc that sends a fixed service-account token (one an
+// admin set in the app's configuration) to the Grafana app URL from the request context. It is
+// for Grafanas that do not give the plugin a managed service account.
+func TokenCredentials(token string) CredentialsFunc {
+	return func(ctx context.Context) (string, string, error) {
+		baseURL, err := appURL(config.GrafanaConfigFromContext(ctx))
+		if err != nil {
+			return "", "", err
+		}
+		return baseURL, token, nil
+	}
+}
+
+func appURL(cfg *config.GrafanaCfg) (string, error) {
+	baseURL, err := cfg.AppURL()
+	if err != nil || baseURL == "" {
+		return "", fmt.Errorf("grafana app URL unavailable: %w", ErrNoServiceAccount)
+	}
+	return baseURL, nil
 }
 
 // Config holds what the per-datasource client needs. The VictoriaMetrics URL, tenant path,
@@ -249,9 +271,10 @@ func (e *UpstreamError) Error() string {
 	withStatus := false
 	switch e.StatusCode {
 	case http.StatusUnauthorized:
-		head = "grafana rejected the plugin service account (HTTP 401); check that managed service accounts are enabled"
+		head = "grafana rejected the plugin service account (HTTP 401); check the token on the app's Configuration page, " +
+			"or that managed service accounts are enabled"
 	case http.StatusForbidden:
-		head = "the plugin service account may not query this datasource (HTTP 403); it needs datasources:query"
+		head = "the plugin service account may not query this datasource (HTTP 403); it needs datasources:read and datasources:query"
 	case http.StatusNotFound:
 		head = "datasource or endpoint not found (HTTP 404); check the datasource URL in Grafana"
 	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
