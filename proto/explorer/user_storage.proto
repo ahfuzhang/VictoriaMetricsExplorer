@@ -1,0 +1,142 @@
+syntax = "proto3";
+
+package explorer.userstorage.v1;
+
+// Per-user favorites kept in Grafana's User Storage (docs/plan_v3.md §5). Only TypeScript is
+// generated: the browser encodes these messages as protobuf → gzip → standard Base64 and stores
+// them as string values of one User Storage resource:
+//
+//   favorites.menu.v1            Tree
+//   favorites.node.v1.<nodeId>   FavoriteContent of the favorite whose TreeNode.id is <nodeId>
+//
+// No version counter or receipt is stored here; concurrent writers are kept apart by the
+// resource's metadata.resourceVersion. Field numbers are never reused.
+
+// Whether a menu entry is a folder or a favorite that holds queries.
+enum NodeKind {
+  NODE_KIND_UNSPECIFIED = 0; // Not set; never a valid stored node.
+  NODE_KIND_FOLDER = 1;      // Folder: children only, no content key.
+  NODE_KIND_FAVORITE = 2;    // Favorite: no children; its content key is found by its id.
+}
+
+// How a saved query statement is drawn.
+enum VisualizationKind {
+  VISUALIZATION_KIND_UNSPECIFIED = 0; // Not set; must be chosen before saving.
+  VISUALIZATION_KIND_TIMESERIES = 1;  // Line chart.
+  VISUALIZATION_KIND_STAT = 2;        // Last non-null value of each series.
+  VISUALIZATION_KIND_HEATMAP = 3;     // Histogram buckets (le / vmrange labels).
+}
+
+// The first-column browse mode a statement was generated from.
+enum SourceScope {
+  SOURCE_SCOPE_UNSPECIFIED = 0; // No browse source: written by hand or imported.
+  SOURCE_SCOPE_BY_NAME = 1;     // By Name: a metric name prefix, or All metrics.
+  SOURCE_SCOPE_BY_POD = 2;      // By Pod: a pod name prefix (workload).
+  SOURCE_SCOPE_BY_NODE = 3;     // By Node: one node.
+}
+
+// The whole menu, stored at favorites.menu.v1. Holds the navigation structure and the node id
+// counter; never PromQL.
+message Tree {
+  // Storage format version, 1 for now. Not a revision number.
+  uint32 schema_version = 1;
+
+  // Largest node id ever given out; folders and favorites share it. 0 for an empty tree; the next
+  // node takes this value + 1. Never lowered, not even when nodes are deleted.
+  uint64 max_tree_node_id = 2;
+
+  // Entries at the root, in display order.
+  repeated TreeNode children = 3;
+}
+
+// One menu entry: a folder or a favorite. Lives inside the Tree only.
+message TreeNode {
+  // Unique, never reused; unchanged by renames and moves. A favorite with id 2 keeps its queries at
+  // favorites.node.v1.2.
+  uint64 id = 1;
+
+  // Name shown in the menu.
+  string name = 2;
+
+  NodeKind kind = 3;
+
+  // Only folders have children; a favorite's list is empty.
+  repeated TreeNode children = 4;
+}
+
+// The queries of one favorite, stored at favorites.node.v1.<node_id>.
+message FavoriteContent {
+  // Storage format version, 1 for now.
+  uint32 schema_version = 1;
+
+  // The favorite's TreeNode.id; must equal the id in the key.
+  uint64 node_id = 2;
+
+  // Queries in display order; may be empty.
+  repeated SavedQuery queries = 3;
+
+  // Last change, Unix milliseconds. Display only; never used to order or detect changes.
+  int64 updated_at_ms = 4;
+}
+
+// One saved query: what a single Favorite click stores. A chart can be made of several statements.
+// Query results are never stored.
+message SavedQuery {
+  // UUID that identifies the query for edits, deletes and moves. Made when the editor opens and kept
+  // across retries, so a replayed append can tell whether it already happened.
+  string id = 1;
+
+  // Display name shown in the query list and above the charts.
+  string name = 2;
+
+  // 1 to 10 statements, drawn one chart each in this order.
+  repeated QueryStatement statements = 3;
+}
+
+// One statement that can be run again on its own.
+message QueryStatement {
+  // The complete PromQL / MetricsQL text, filters included.
+  string expression = 1;
+
+  // Grafana datasource UID the statement was saved from. Statements run on the datasource selected
+  // in the toolbar; this one is used only when none is selected.
+  string datasource_uid = 2;
+
+  // Datasource name when saved; a hint for display only (e.g. after the datasource was deleted).
+  string datasource_name_hint = 3;
+
+  // Grafana unit id used to format values (bytes, s, percentunit, ...). Never changes the values.
+  string unit_id = 4;
+
+  VisualizationKind visualization = 5;
+
+  // Metric the statement was generated from; empty when written by hand. Never used to rebuild the
+  // expression.
+  string source_metric = 6;
+
+  // Browse mode the statement was generated in; UNSPECIFIED for hand-written statements.
+  SourceScope source_scope = 7;
+
+  // BY_NAME: metric name prefix, empty for All metrics; BY_POD: pod prefix; BY_NODE: node name.
+  // Only the prefix or name is kept, not the pods the group held at the time.
+  string source_scope_value = 8;
+
+  // Label filters selected when the statement was generated, sorted by name and value. Values of
+  // one label are OR-ed, labels are AND-ed. Already part of the expression; never re-applied.
+  repeated SavedLabelFilter source_filters = 9;
+
+  // Heatmap only: unit of the bucket bounds (e.g. s for latency buckets).
+  string heatmap_bucket_unit_id = 10;
+
+  // Heatmap only: unit of the bucket values the colors show (e.g. counts per second).
+  string heatmap_value_unit_id = 11;
+}
+
+// One label filter and its selected values. Same meaning as explorer.LabelFilter, kept separate so a
+// change to the query API cannot alter stored data.
+message SavedLabelFilter {
+  string name = 1;
+
+  // At least one value.
+  repeated string values = 2;
+}

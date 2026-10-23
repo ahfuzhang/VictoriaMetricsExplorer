@@ -6,6 +6,7 @@ import { css } from '@emotion/css';
 import { Capabilities } from '../model';
 import { describeError, Facet, fetchFacets, FacetResponse } from '../api';
 import type { SelectedFilters } from './Explorer';
+import { groupableLabels } from './groupBy';
 
 interface Props {
   datasourceUID: string;
@@ -18,6 +19,11 @@ interface Props {
   refreshKey: number;
   onFilterChange: (label: string, values: string[]) => void;
   onResetFilters: () => void;
+  /**
+   * The label names the chart can split the series left by these filters by, once they are loaded;
+   * null when the labels could not be loaded.
+   */
+  onGroupableLabels: (filters: SelectedFilters, labels: string[] | null) => void;
 }
 
 interface FacetResult {
@@ -37,6 +43,7 @@ export const FacetPanel: React.FC<Props> = ({
   refreshKey,
   onFilterChange,
   onResetFilters,
+  onGroupableLabels,
 }) => {
   const styles = useStyles2(getStyles);
   const [result, setResult] = useState<FacetResult>({ requestKey: '', response: null, error: '' });
@@ -63,10 +70,12 @@ export const FacetPanel: React.FC<Props> = ({
       .then((nextResponse) => {
         if (generation === generationRef.current) {
           setResult({ requestKey, response: nextResponse, error: '' });
+          onGroupableLabels(filters, groupableLabels(nextResponse));
         }
       })
       .catch((err: unknown) => {
         if (generation === generationRef.current) {
+          onGroupableLabels(filters, null);
           setResult((previous) => ({
             requestKey,
             response: previous.response,
@@ -78,7 +87,18 @@ export const FacetPanel: React.FC<Props> = ({
     return () => {
       generationRef.current += 1;
     };
-  }, [capabilities.maxFacetValues, datasourceUID, endMs, filters, metric, node, podGroup, requestKey, startMs]);
+  }, [
+    capabilities.maxFacetValues,
+    datasourceUID,
+    endMs,
+    filters,
+    metric,
+    node,
+    onGroupableLabels,
+    podGroup,
+    requestKey,
+    startMs,
+  ]);
 
   const toggleFilter = (label: string, value: string) => {
     const current = filters[label] ?? [];

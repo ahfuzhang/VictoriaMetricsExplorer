@@ -1,4 +1,4 @@
-.PHONY: proto build build-go build-frontend test test-go vet lint clean dev provision docker build-linux run stop logs
+.PHONY: proto build build-go build-frontend test test-go test-frontend test-e2e test-userstorage vet lint clean dev provision docker build-linux run stop logs
 
 # Plugin ID (the Explorer is a single app plugin; it uses the existing VictoriaMetrics datasource)
 APP_PLUGIN_ID := ahfuzhang-victoriametricsexplorer-app
@@ -37,7 +37,7 @@ build-frontend: ## Build the frontend bundles
 
 ##@ Protobuf
 
-proto: ## Generate Go (pkg/proto) and TypeScript (src/generated) code from proto/
+proto: ## Generate Go (pkg/proto) and TypeScript (src/generated) code from proto/ (user_storage.proto: TypeScript only)
 	protoc -I proto \
 		--go_out=. --go_opt=module=github.com/ahfuzhang/victoriametricsexplorer \
 		--plugin=protoc-gen-es=node_modules/.bin/protoc-gen-es \
@@ -47,6 +47,11 @@ proto: ## Generate Go (pkg/proto) and TypeScript (src/generated) code from proto
 	protoc -I proto \
 		--go_out=. --go_opt=module=github.com/ahfuzhang/victoriametricsexplorer \
 		proto/explorer/cache.proto
+	@# Per-user favorites kept in Grafana User Storage by the browser: TypeScript only.
+	protoc -I proto \
+		--plugin=protoc-gen-es=node_modules/.bin/protoc-gen-es \
+		--es_out=src/generated --es_opt=target=ts,import_extension=none \
+		proto/explorer/user_storage.proto
 
 ##@ Development
 
@@ -65,6 +70,12 @@ test-go: ## Run Go tests
 
 test-frontend: ## Run frontend tests
 	$(NPM) test
+
+test-e2e: ## Run the favorites end-to-end tests against a running Grafana (make run first; uses Google Chrome)
+	GRAFANA_URL=$(GRAFANA_URL) npx playwright test
+
+test-userstorage: ## Check the Grafana User Storage API contract favorites rely on (docs/userstorage_p0.md)
+	node tests/userstorage/contract.mjs $$(echo $(GRAFANA_URL) | sed 's#://#://admin:admin@#')
 
 ##@ Quality
 
@@ -133,6 +144,6 @@ clean: ## Clean build artifacts
 ##@ Help
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 .DEFAULT_GOAL := help

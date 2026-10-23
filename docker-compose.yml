@@ -2,7 +2,10 @@ version: "3.8"
 
 services:
   grafana:
-    image: grafana/grafana:latest
+    # Pin a version for verification runs, e.g. GRAFANA_VERSION=12.3.1 (docs/userstorage_p0.md).
+    # Saving favorites needs 12.3.0 or later. Don't point an existing grafana-data volume at an
+    # older version than it was last used with: Grafana does not downgrade its database.
+    image: grafana/grafana:${GRAFANA_VERSION:-latest}
     ports:
       - "3000:3000"
     environment:

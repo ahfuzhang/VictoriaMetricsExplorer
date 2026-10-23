@@ -14,6 +14,10 @@ coverage.out
 node_modules/
 npm-debug.log*
 
+# Playwright
+test-results/
+playwright-report/
+
 # IDE
 .idea/
 .vscode/

@@ -186,6 +186,8 @@ export interface ChartPlan {
   maxSeries: number;
   warnings: string[];
   alternatives: string[];
+  /** Labels the query is summed by, one curve per value combination; empty for one curve. */
+  groupBy: string[];
 }
 
 /** One histogram bucket: the observations that fell in (from, to] over the chart's time range. */
@@ -584,6 +586,8 @@ export async function fetchChartPlan(
     step?: string;
     /** Counter function to plot: rate, increase or irate. Omitted lets the backend choose. */
     rateMode?: string;
+    /** Labels a counter or gauge curve is split by (sum by); omitted draws one curve. */
+    groupBy?: string[];
   }
 ): Promise<ChartPlanResponse> {
   const pb = await callProto({
@@ -600,6 +604,7 @@ export async function fetchChartPlan(
         range: timeRange(params.startMs, params.endMs),
         step: params.step,
         rateMode: params.rateMode,
+        groupBy: params.groupBy,
       },
     },
   });
@@ -623,6 +628,7 @@ export async function fetchChartPlan(
       maxSeries: plan?.maxSeries ?? 0,
       warnings: plan?.warnings ?? [],
       alternatives: plan?.alternatives ?? [],
+      groupBy: plan?.groupBy ?? [],
     },
     summary: pb.summary ? { sum: pb.summary.sum, sampleCount: Number(pb.summary.sampleCount) } : undefined,
     histogramTable: hist
@@ -796,17 +802,50 @@ export async function purgeCache(uid: string, prefix?: string): Promise<{ purged
 }
 
 /** The chart asks for about this many points per series; the backend raises the step to fit. */
-const CHART_MAX_DATA_POINTS = 1000;
+export const CHART_MAX_DATA_POINTS = 1000;
+
+export interface RangeQueryResult {
+  /** One DataFrame per series: a time field and a value field carrying the series labels. */
+  frames: DataFrame[];
+  /** The step the backend actually used, e.g. "1m"; it can be larger than the one asked for. */
+  step: string;
+  meta: {
+    requestId: string;
+    /** The backend kept only its maximum number of series. */
+    truncated: boolean;
+    returnedCount: number;
+    /** The range after aligning both ends to the step. */
+    effectiveRange: { startMs: number; endMs: number };
+  };
+}
 
 /**
- * Run the chart's range query through the app backend (VictoriaMetrics /api/v1/query_range via the
- * Grafana datasource proxy) and return one DataFrame per series: a time field and a value field
- * carrying the series labels, the shape Grafana's own query path produced.
+ * Run a range query through the app backend (VictoriaMetrics /api/v1/query_range via the Grafana
+ * datasource proxy). An empty step lets the backend choose: 1m, raised to keep about
+ * CHART_MAX_DATA_POINTS points per series.
  */
+export async function queryRange(
+  uid: string,
+  params: { expr: string; step: string; range: TimeRange; abortSignal?: AbortSignal }
+): Promise<RangeQueryResult> {
+  // Callers show the error in place, so no Grafana error toast.
+  return runRangeQuery(uid, params, false);
+}
+
+/** The chart's range query, returning only the series (see queryRange for step and truncation). */
 export async function queryChartData(
   uid: string,
   params: { expr: string; step: string; range: TimeRange }
 ): Promise<DataFrame[]> {
+  // Keeps backendSrv's default error toast, as before queryRange existed.
+  return (await runRangeQuery(uid, params, undefined)).frames;
+}
+
+async function runRangeQuery(
+  uid: string,
+  params: { expr: string; step: string; range: TimeRange; abortSignal?: AbortSignal },
+  showErrorAlert: boolean | undefined
+): Promise<RangeQueryResult> {
   const pb = await callProto({
     url: dsURL(uid, '/query-range'),
     method: 'POST',
@@ -820,9 +859,11 @@ export async function queryChartData(
         maxDataPoints: CHART_MAX_DATA_POINTS,
       },
     },
+    showErrorAlert,
+    abortSignal: params.abortSignal,
   });
   const intervalMs = (stepSecondsOf(pb.step) ?? 60) * 1000;
-  return pb.series.map((series) => {
+  const frames: DataFrame[] = pb.series.map((series) => {
     const times = series.timestampsMs.map(Number);
     const labels = { ...series.labels };
     const name = seriesName(labels, params.expr);
@@ -841,6 +882,16 @@ export async function queryChartData(
       ],
     };
   });
+  return {
+    frames,
+    step: pb.step,
+    meta: {
+      requestId: pb.meta?.requestId ?? '',
+      truncated: pb.meta?.truncated ?? false,
+      returnedCount: pb.meta?.returnedCount ?? frames.length,
+      effectiveRange: rangeFromProto(pb.meta?.effectiveRange),
+    },
+  };
 }
 
 /**

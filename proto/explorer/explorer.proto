@@ -326,6 +326,9 @@ message ChartPlanRequest {
   string step = 6;             // "auto", "15s", "1m", etc.
   // Counter function to plot: rate, increase or irate. Empty lets the backend choose.
   string rate_mode = 7;
+  // Labels a counter or gauge curve is split by: sum by (<group_by>) draws one curve per label
+  // value combination. Empty sums every series into one curve; other types ignore it.
+  repeated string group_by = 8;
 }
 
 message ChartPlan {
@@ -342,6 +345,7 @@ message ChartPlan {
   uint32 max_series = 11;
   repeated string warnings = 12;
   repeated string alternatives = 13;
+  repeated string group_by = 14;   // labels the query is summed by; empty for one curve
 }
 
 message ChartSummary {
@@ -387,7 +391,7 @@ message ChartPlanResponse {
   SchemaVersion schema = 1;
   ResponseMeta meta = 2;
   ChartPlan plan = 3;
-  ChartSummary summary = 4;            // only for timeseries with finite samples
+  ChartSummary summary = 4;            // only for one-curve timeseries with finite samples
   HistogramTable histogram_table = 5;  // only with a heatmap visualization
   StatTable stat_table = 6;            // only for the stat-value type
 }

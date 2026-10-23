@@ -2292,7 +2292,10 @@ type ChartPlanRequest struct {
 	Range    *TimeRange             `protobuf:"bytes,5,opt,name=range,proto3" json:"range,omitempty"`
 	Step     string                 `protobuf:"bytes,6,opt,name=step,proto3" json:"step,omitempty"` // "auto", "15s", "1m", etc.
 	// Counter function to plot: rate, increase or irate. Empty lets the backend choose.
-	RateMode      string `protobuf:"bytes,7,opt,name=rate_mode,json=rateMode,proto3" json:"rate_mode,omitempty"`
+	RateMode string `protobuf:"bytes,7,opt,name=rate_mode,json=rateMode,proto3" json:"rate_mode,omitempty"`
+	// Labels a counter or gauge curve is split by: sum by (<group_by>) draws one curve per label
+	// value combination. Empty sums every series into one curve; other types ignore it.
+	GroupBy       []string `protobuf:"bytes,8,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2376,6 +2379,13 @@ func (x *ChartPlanRequest) GetRateMode() string {
 	return ""
 }
 
+func (x *ChartPlanRequest) GetGroupBy() []string {
+	if x != nil {
+		return x.GroupBy
+	}
+	return nil
+}
+
 type ChartPlan struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	Metric               string                 `protobuf:"bytes,1,opt,name=metric,proto3" json:"metric,omitempty"`
@@ -2391,6 +2401,7 @@ type ChartPlan struct {
 	MaxSeries            uint32                 `protobuf:"varint,11,opt,name=max_series,json=maxSeries,proto3" json:"max_series,omitempty"`
 	Warnings             []string               `protobuf:"bytes,12,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	Alternatives         []string               `protobuf:"bytes,13,rep,name=alternatives,proto3" json:"alternatives,omitempty"`
+	GroupBy              []string               `protobuf:"bytes,14,rep,name=group_by,json=groupBy,proto3" json:"group_by,omitempty"` // labels the query is summed by; empty for one curve
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2512,6 +2523,13 @@ func (x *ChartPlan) GetWarnings() []string {
 func (x *ChartPlan) GetAlternatives() []string {
 	if x != nil {
 		return x.Alternatives
+	}
+	return nil
+}
+
+func (x *ChartPlan) GetGroupBy() []string {
+	if x != nil {
+		return x.GroupBy
 	}
 	return nil
 }
@@ -2851,7 +2869,7 @@ type ChartPlanResponse struct {
 	Schema         *SchemaVersion         `protobuf:"bytes,1,opt,name=schema,proto3" json:"schema,omitempty"`
 	Meta           *ResponseMeta          `protobuf:"bytes,2,opt,name=meta,proto3" json:"meta,omitempty"`
 	Plan           *ChartPlan             `protobuf:"bytes,3,opt,name=plan,proto3" json:"plan,omitempty"`
-	Summary        *ChartSummary          `protobuf:"bytes,4,opt,name=summary,proto3" json:"summary,omitempty"`                                     // only for timeseries with finite samples
+	Summary        *ChartSummary          `protobuf:"bytes,4,opt,name=summary,proto3" json:"summary,omitempty"`                                     // only for one-curve timeseries with finite samples
 	HistogramTable *HistogramTable        `protobuf:"bytes,5,opt,name=histogram_table,json=histogramTable,proto3" json:"histogram_table,omitempty"` // only with a heatmap visualization
 	StatTable      *StatTable             `protobuf:"bytes,6,opt,name=stat_table,json=statTable,proto3" json:"stat_table,omitempty"`                // only for the stat-value type
 	unknownFields  protoimpl.UnknownFields
@@ -3747,7 +3765,7 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\x10MetadataResponse\x12/\n" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12.\n" +
-	"\x05items\x18\x03 \x03(\v2\x18.explorer.MetricMetadataR\x05items\"\xe8\x01\n" +
+	"\x05items\x18\x03 \x03(\v2\x18.explorer.MetricMetadataR\x05items\"\x83\x02\n" +
 	"\x10ChartPlanRequest\x12\x16\n" +
 	"\x06metric\x18\x01 \x01(\tR\x06metric\x12/\n" +
 	"\afilters\x18\x02 \x03(\v2\x15.explorer.LabelFilterR\afilters\x12\x1b\n" +
@@ -3755,7 +3773,8 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\x04node\x18\x04 \x01(\tR\x04node\x12)\n" +
 	"\x05range\x18\x05 \x01(\v2\x13.explorer.TimeRangeR\x05range\x12\x12\n" +
 	"\x04step\x18\x06 \x01(\tR\x04step\x12\x1b\n" +
-	"\trate_mode\x18\a \x01(\tR\brateMode\"\xae\x03\n" +
+	"\trate_mode\x18\a \x01(\tR\brateMode\x12\x19\n" +
+	"\bgroup_by\x18\b \x03(\tR\agroupBy\"\xc9\x03\n" +
 	"\tChartPlan\x12\x16\n" +
 	"\x06metric\x18\x01 \x01(\tR\x06metric\x12\x1f\n" +
 	"\vmetric_type\x18\x02 \x01(\tR\n" +
@@ -3773,7 +3792,8 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\n" +
 	"max_series\x18\v \x01(\rR\tmaxSeries\x12\x1a\n" +
 	"\bwarnings\x18\f \x03(\tR\bwarnings\x12\"\n" +
-	"\falternatives\x18\r \x03(\tR\falternatives\"C\n" +
+	"\falternatives\x18\r \x03(\tR\falternatives\x12\x19\n" +
+	"\bgroup_by\x18\x0e \x03(\tR\agroupBy\"C\n" +
 	"\fChartSummary\x12\x10\n" +
 	"\x03sum\x18\x01 \x01(\x01R\x03sum\x12!\n" +
 	"\fsample_count\x18\x02 \x01(\x04R\vsampleCount\"\x96\x01\n" +

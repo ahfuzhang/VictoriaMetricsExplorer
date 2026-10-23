@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1123,12 +1124,14 @@ func (h *Handlers) handleChartPlan(w http.ResponseWriter, r *http.Request) {
 	// without an explicit rate mode, inspect the requested range at per-second resolution. Matching
 	// the original MetricsExplorer behavior, switch low-frequency counters to an increase curve when
 	// more than half of the finite rate samples are below one.
+	// The probe always sums every series, so splitting the curve by labels never changes between
+	// per second and per minute.
 	counterFunc := counterFuncRate
 	var counterProbeData jsontext.Value
 	if metricType == "counter" && isCounterFunc(req.RateMode) {
 		counterFunc = req.RateMode
 	} else if metricType == "counter" {
-		probeQuery := counterQuery(counterFuncRate, selector, window)
+		probeQuery := counterQuery(counterFuncRate, selector, window, nil)
 		if data, queryErr := h.router.client.QueryRange(r.Context(), probeQuery, rangeStart, rangeEnd, step); queryErr == nil {
 			counterProbeData = data
 			if shouldUsePerMinute(data) {
@@ -1144,7 +1147,12 @@ func (h *Handlers) handleChartPlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	perMinute := counterFunc == counterFuncIncrease
-	query, aggregation, viz := buildChartQuery(metricType, selector, window, counterFunc)
+	// Only a counter or gauge curve is split by the labels picked under the chart.
+	groupBy := groupByLabels(req.GroupBy)
+	if metricType != metricTypeCounter && metricType != metricTypeGauge {
+		groupBy = nil
+	}
+	query, aggregation, viz := buildChartQuery(metricType, selector, window, counterFunc, groupBy)
 	// VictoriaMetrics histograms split buckets by vmrange instead of le, so "sum by (le)" would
 	// merge every bucket into one series: copy the bucket into le first.
 	var histogramTable *histogramTableResult
@@ -1165,6 +1173,7 @@ func (h *Handlers) handleChartPlan(w http.ResponseWriter, r *http.Request) {
 		query = selector
 		aggregation = "last"
 		viz = "stat"
+		groupBy = nil
 	}
 	displayUnit := inferDisplayUnit(req.Metric, metricType, metricUnit, perMinute)
 
@@ -1182,8 +1191,9 @@ func (h *Handlers) handleChartPlan(w http.ResponseWriter, r *http.Request) {
 	// Calculate the sum in the backend from the same range and step used by the chart. Counter
 	// planning already fetched the per-second rate curve, so reuse it only when it is also the
 	// planned chart query. Low-frequency counters use increase(), and must query that curve here.
+	// Split curves list their own statistics in the legend, so they need no sum.
 	var summary *explorerpb.ChartSummary
-	if viz == "timeseries" {
+	if viz == "timeseries" && len(groupBy) == 0 {
 		data := counterProbeData
 		if metricType == "counter" && counterFunc != counterFuncRate {
 			data = nil
@@ -1217,6 +1227,7 @@ func (h *Handlers) handleChartPlan(w http.ResponseWriter, r *http.Request) {
 			Aggregation:          aggregation,
 			Visualization:        viz,
 			MaxSeries:            uint32(h.router.limits.MaxChartSeries),
+			GroupBy:              groupBy,
 		},
 		Summary: summary,
 	}
@@ -1316,8 +1327,53 @@ func isCounterFunc(fn string) bool {
 	return fn == counterFuncRate || fn == counterFuncIncrease || fn == counterFuncIRate
 }
 
-func counterQuery(counterFunc, selector, window string) string {
-	return "sum by () (" + counterFunc + "(" + selector + "[" + window + "]))"
+// groupByLabels keeps the valid, distinct label names of a group-by request in their order. It
+// filters labels in place.
+func groupByLabels(labels []string) []string {
+	groupBy := labels[:0]
+	for _, label := range labels {
+		if label != "__name__" && promLabelNamePattern.MatchString(label) && !slices.Contains(groupBy, label) {
+			groupBy = append(groupBy, label)
+		}
+	}
+	return groupBy
+}
+
+// sumByLen is the length appendSumBy appends for groupBy.
+func sumByLen(groupBy []string) int {
+	n := len("sum by () (")
+	for i, label := range groupBy {
+		if i > 0 {
+			n += len(", ")
+		}
+		n += len(label)
+	}
+	return n
+}
+
+// appendSumBy appends the opening of a sum over groupBy, e.g. "sum by (job, instance) (". No
+// labels sum every series into one.
+func appendSumBy(b []byte, groupBy []string) []byte {
+	b = append(b, "sum by ("...)
+	for i, label := range groupBy {
+		if i > 0 {
+			b = append(b, ", "...)
+		}
+		b = append(b, label...)
+	}
+	return append(b, ") ("...)
+}
+
+func counterQuery(counterFunc, selector, window string, groupBy []string) string {
+	b := make([]byte, 0, sumByLen(groupBy)+len(counterFunc)+len(selector)+len(window)+len("([]))"))
+	b = append(appendSumBy(b, groupBy), counterFunc...)
+	b = append(append(append(append(b, '('), selector...), '['), window...)
+	return bytesutil.ToUnsafeString(append(b, "]))"...))
+}
+
+func gaugeQuery(selector string, groupBy []string) string {
+	b := make([]byte, 0, sumByLen(groupBy)+len(selector)+len(")"))
+	return bytesutil.ToUnsafeString(append(append(appendSumBy(b, groupBy), selector...), ')'))
 }
 
 // vmrangeSampleSeries is how many bucket series hasVMRangeBuckets inspects.
@@ -1359,22 +1415,24 @@ func vmrangeHeatmapQuery(selector, window, counterFunc string) string {
 		`"le", "$1", "vmrange", "([^\\n]+)\\.\\.\\.([^\\n]+)"))`
 }
 
-func buildChartQuery(metricType, selector, window, counterFunc string) (query, aggregation, visualization string) {
+// buildChartQuery returns the chart query of a metric type. groupBy splits a counter or a plain
+// time series into one curve per label value combination; the other types ignore it.
+func buildChartQuery(metricType, selector, window, counterFunc string, groupBy []string) (query, aggregation, visualization string) {
 	switch metricType {
 	case "counter":
 		if !isCounterFunc(counterFunc) {
 			counterFunc = counterFuncRate
 		}
-		return counterQuery(counterFunc, selector, window), "sum_" + counterFunc, "timeseries"
+		return counterQuery(counterFunc, selector, window, groupBy), "sum_" + counterFunc, "timeseries"
 	case "histogram", "gaugehistogram":
 		return "sum by (le) (" + histogramFunc(counterFunc) + "(" + selector + "[" + window + "]))",
 			histogramAggregation(counterFunc), "heatmap"
 	case metricTypeStatValue:
-		return "sum by () (" + selector + ")", "sum", "stat"
+		return gaugeQuery(selector, nil), "sum", "stat"
 	case "info", "stateset":
 		return selector, "last", "stat"
 	default:
-		return "sum by () (" + selector + ")", "sum", "timeseries"
+		return gaugeQuery(selector, groupBy), "sum", "timeseries"
 	}
 }
 

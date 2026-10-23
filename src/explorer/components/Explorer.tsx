@@ -1,13 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { create } from '@bufbuild/protobuf';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
+import { getDataSourceSrv } from '@grafana/runtime';
 import { useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
+import { QueryStatementSchema, SourceScope, VisualizationKind } from '../../generated/explorer/user_storage_pb';
 import { Capabilities } from '../model';
+import { useFavorites } from '../favorites/FavoritesProvider';
+import { SavedModeColumns } from '../favorites/components/SavedModeColumns';
+import { savedFilters } from '../favorites/drafts';
+import { heatmapUnitsFromPlan, planUnitToUnitId, visualizationFromPlan } from '../favorites/units';
 import { TreeView } from './TreeView';
 import { MetricList } from './MetricList';
 import { FacetPanel } from './FacetPanel';
-import { ChartPanel } from './ChartPanel';
+import { ChartPanel, type ChartSnapshot } from './ChartPanel';
 
 interface Props {
   datasourceUID: string;
@@ -25,10 +32,8 @@ export type MetricScope =
   | { kind: 'all' }
   | { kind: 'group'; group: string }
   | { kind: 'pod'; group: string; pods: string[] }
-  | { kind: 'node'; node: string }
-  | { kind: 'favorites' };
+  | { kind: 'node'; node: string };
 
-const FAVORITES_KEY = 'vm_explorer_favorites';
 const COLUMN_WIDTHS_KEY = 'victoriametrics-explorer.columns.v1';
 const RESIZE_HANDLE_WIDTH = 8;
 const COLLAPSED_TREE_WIDTH = 44;
@@ -131,22 +136,36 @@ function removeStoredColumnWidths(): void {
   }
 }
 
-function readFavorites(): string[] {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? '[]');
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
-  } catch {
-    return [];
+/** The browse source a saved statement records (docs/plan_v3.md §5.3). */
+function sourceOf(scope: MetricScope): { sourceScope: SourceScope; sourceScopeValue: string } {
+  switch (scope.kind) {
+    case 'all':
+      return { sourceScope: SourceScope.BY_NAME, sourceScopeValue: '' };
+    case 'group':
+      return { sourceScope: SourceScope.BY_NAME, sourceScopeValue: scope.group };
+    case 'pod':
+      // The pod prefix only, not the pods the group held at the time.
+      return { sourceScope: SourceScope.BY_POD, sourceScopeValue: scope.group };
+    case 'node':
+      return { sourceScope: SourceScope.BY_NODE, sourceScopeValue: scope.node };
   }
 }
 
 export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRange, step, refreshKey }) => {
   const styles = useStyles2(getStyles);
+  const favorites = useFavorites();
+  const { exitSavedMode, openSave } = favorites;
+  // A favorite open in the menu replaces columns 2–4 with its query list and one wide chart column;
+  // the browse selection below is kept meanwhile.
+  const savedMode = favorites.selection !== null;
 
   const [scope, setScope] = useState<MetricScope>({ kind: 'all' });
   const [selectedMetric, setSelectedMetric] = useState('');
   const [filters, setFilters] = useState<SelectedFilters>({});
-  const [favoriteMetrics, setFavoriteMetrics] = useState<string[]>(readFavorites);
+  // Labels the chart is summed by, picked under it from the labels the filters leave groupable.
+  const [groupBy, setGroupBy] = useState<string[]>([]);
+  // The groupable labels the label column last loaded, and the filters they were loaded for.
+  const [groupable, setGroupable] = useState<{ filters: SelectedFilters; labels: string[] | null } | null>(null);
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>(readColumnWidths);
   const [treeCollapsed, setTreeCollapsed] = useState(false);
   const [activeSeparator, setActiveSeparator] = useState<number | null>(null);
@@ -160,6 +179,8 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
   useEffect(() => {
     setSelectedMetric('');
     setFilters({});
+    setGroupBy([]);
+    setGroupable(null);
     setScope({ kind: 'all' });
   }, [datasourceUID]);
 
@@ -184,13 +205,21 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
   const handleMetricSelect = useCallback((metric: string) => {
     setSelectedMetric(metric);
     setFilters({});
+    setGroupBy([]);
+    setGroupable(null);
   }, []);
 
-  const handleScopeChange = useCallback((nextScope: MetricScope) => {
-    setScope(nextScope);
-    setSelectedMetric('');
-    setFilters({});
-  }, []);
+  const handleScopeChange = useCallback(
+    (nextScope: MetricScope) => {
+      exitSavedMode();
+      setScope(nextScope);
+      setSelectedMetric('');
+      setFilters({});
+      setGroupBy([]);
+      setGroupable(null);
+    },
+    [exitSavedMode]
+  );
 
   const handleFilterChange = useCallback((label: string, values: string[]) => {
     setFilters((previous) => {
@@ -204,19 +233,40 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
     });
   }, []);
 
-  const toggleFavorite = useCallback((metric: string) => {
-    setFavoriteMetrics((previous) => {
-      const next = previous.includes(metric)
-        ? previous.filter((favorite) => favorite !== metric)
-        : [...previous, metric];
-      try {
-        localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
-      } catch {
-        // Keep favorites usable for this session when browser storage is unavailable.
-      }
-      return next;
-    });
+  // A label the new filters leave with one value can no longer split the chart, so it is unpicked.
+  const handleGroupableLabels = useCallback((loadedFilters: SelectedFilters, labels: string[] | null) => {
+    setGroupable({ filters: loadedFilters, labels });
+    if (labels) {
+      setGroupBy((previous) => {
+        const next = previous.filter((label) => labels.includes(label));
+        return next.length === previous.length ? previous : next;
+      });
+    }
   }, []);
+
+  // Prefill the save dialog with the chart on screen: its final expression (filters, pod or node
+  // and rate already applied), unit, visualization, and where in the first column it came from.
+  const handleFavorite = useCallback(
+    ({ datasourceUID: uid, metric, plan }: ChartSnapshot) => {
+      const visualization = visualizationFromPlan(plan.visualization);
+      const heatmap =
+        visualization === VisualizationKind.HEATMAP ? heatmapUnitsFromPlan(metric, plan.aggregation) : null;
+      const statement = create(QueryStatementSchema, {
+        expression: plan.query,
+        datasourceUid: uid,
+        datasourceNameHint: getDataSourceSrv().getInstanceSettings(uid)?.name ?? '',
+        unitId: planUnitToUnitId(plan.unit),
+        visualization,
+        sourceMetric: metric,
+        ...sourceOf(scope),
+        sourceFilters: savedFilters(filters),
+        heatmapBucketUnitId: heatmap?.bucketUnitId ?? '',
+        heatmapValueUnitId: heatmap?.valueUnitId ?? '',
+      });
+      openSave({ queryName: metric, statement });
+    },
+    [filters, openSave, scope]
+  );
 
   const readRenderedColumnWidths = useCallback((): ColumnWidths => {
     const refs = [treeColumnRef, metricsColumnRef, labelsColumnRef, visualizationColumnRef];
@@ -415,6 +465,100 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
     );
   };
 
+  const browseColumns = (
+    <>
+      <section ref={metricsColumnRef} className={styles.column} aria-label="Metric names">
+        <MetricList
+          datasourceUID={datasourceUID}
+          capabilities={capabilities}
+          selectedMetric={selectedMetric}
+          scope={scope}
+          timeRange={timeRange}
+          refreshKey={refreshKey}
+          onSelectMetric={handleMetricSelect}
+        />
+      </section>
+
+      {separator(1)}
+
+      <section ref={labelsColumnRef} className={styles.column} aria-label="Label filters">
+        {selectedMetric ? (
+          <FacetPanel
+            key={selectedMetric}
+            datasourceUID={datasourceUID}
+            metric={selectedMetric}
+            capabilities={capabilities}
+            filters={filters}
+            podGroup={podGroup}
+            node={node}
+            timeRange={timeRange}
+            refreshKey={refreshKey}
+            onFilterChange={handleFilterChange}
+            onResetFilters={() => setFilters({})}
+            onGroupableLabels={handleGroupableLabels}
+          />
+        ) : (
+          <EmptyColumn title="03 · Label filters" message="Select a metric to inspect its label names and values." />
+        )}
+      </section>
+
+      {separator(2)}
+
+      <section
+        ref={visualizationColumnRef}
+        className={`${styles.column} ${styles.visualizationColumn}`}
+        aria-label="Visualization"
+      >
+        {selectedMetric ? (
+          <ChartPanel
+            datasourceUID={datasourceUID}
+            metric={selectedMetric}
+            filters={filters}
+            podGroup={podGroup}
+            node={node}
+            timeRange={timeRange}
+            step={step}
+            refreshKey={refreshKey}
+            groupBy={groupBy}
+            groupByOptions={groupable?.labels ?? []}
+            // Until the label column has loaded the labels for new filters, a grouped chart waits so
+            // it never draws a grouping those filters drop. Labels that failed to load drop none.
+            groupByPending={groupBy.length > 0 && groupable?.filters !== filters}
+            onGroupByChange={setGroupBy}
+            onFavorite={handleFavorite}
+            favoriteBlocked={favorites.writeBlocked}
+          />
+        ) : (
+          <EmptyColumn
+            title="04 · Visualization"
+            message="Select a metric to render its chart, heatmap, or stat value."
+            topAligned
+          />
+        )}
+      </section>
+    </>
+  );
+
+  // The query list keeps the metric names' track; the charts span the label and visualization
+  // tracks, so the widths set while browsing still apply.
+  const savedColumns = (
+    <SavedModeColumns>
+      {({ list, panel }) => (
+        <>
+          <section ref={metricsColumnRef} className={styles.column} aria-label="Saved queries">
+            {list}
+          </section>
+
+          {separator(1)}
+
+          <section className={`${styles.column} ${styles.savedChartsColumn}`} aria-label="Visualization">
+            {panel}
+          </section>
+        </>
+      )}
+    </SavedModeColumns>
+  );
+
   return (
     <div className={styles.scrollContainer}>
       <div className={styles.explorer} style={{ gridTemplateColumns, minWidth: `${layoutMinimumWidth}px` }}>
@@ -423,7 +567,6 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
             datasourceUID={datasourceUID}
             timeRange={timeRange}
             scope={scope}
-            favoriteCount={favoriteMetrics.length}
             collapsed={treeCollapsed}
             onScopeChange={handleScopeChange}
             onToggleCollapsed={toggleTreeCollapsed}
@@ -432,69 +575,7 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
 
         {separator(0)}
 
-        <section ref={metricsColumnRef} className={styles.column} aria-label="Metric names">
-          <MetricList
-            datasourceUID={datasourceUID}
-            capabilities={capabilities}
-            selectedMetric={selectedMetric}
-            scope={scope}
-            favoriteMetrics={favoriteMetrics}
-            timeRange={timeRange}
-            refreshKey={refreshKey}
-            onSelectMetric={handleMetricSelect}
-          />
-        </section>
-
-        {separator(1)}
-
-        <section ref={labelsColumnRef} className={styles.column} aria-label="Label filters">
-          {selectedMetric ? (
-            <FacetPanel
-              key={selectedMetric}
-              datasourceUID={datasourceUID}
-              metric={selectedMetric}
-              capabilities={capabilities}
-              filters={filters}
-              podGroup={podGroup}
-              node={node}
-              timeRange={timeRange}
-              refreshKey={refreshKey}
-              onFilterChange={handleFilterChange}
-              onResetFilters={() => setFilters({})}
-            />
-          ) : (
-            <EmptyColumn title="03 · Label filters" message="Select a metric to inspect its label names and values." />
-          )}
-        </section>
-
-        {separator(2)}
-
-        <section
-          ref={visualizationColumnRef}
-          className={`${styles.column} ${styles.visualizationColumn}`}
-          aria-label="Visualization"
-        >
-          {selectedMetric ? (
-            <ChartPanel
-              datasourceUID={datasourceUID}
-              metric={selectedMetric}
-              filters={filters}
-              podGroup={podGroup}
-              node={node}
-              timeRange={timeRange}
-              step={step}
-              refreshKey={refreshKey}
-              isFavorite={favoriteMetrics.includes(selectedMetric)}
-              onToggleFavorite={() => toggleFavorite(selectedMetric)}
-            />
-          ) : (
-            <EmptyColumn
-              title="04 · Visualization"
-              message="Select a metric to render its chart, heatmap, or stat value."
-              topAligned
-            />
-          )}
-        </section>
+        {savedMode ? savedColumns : browseColumns}
       </div>
     </div>
   );
@@ -540,6 +621,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   visualizationColumn: css({
     justifyContent: 'flex-start',
+  }),
+  savedChartsColumn: css({
+    gridColumn: 'span 3',
   }),
   resizeHandle: css({
     position: 'relative',

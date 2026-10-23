@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { locationService } from '@grafana/runtime';
 import { Select, Button, LoadingPlaceholder, Alert, useStyles2 } from '@grafana/ui';
-import { GrafanaTheme2, SelectableValue, TimeRange, dateTime } from '@grafana/data';
+import { AppRootProps, GrafanaTheme2, SelectableValue, TimeRange, dateTime, rangeUtil } from '@grafana/data';
 import { css } from '@emotion/css';
 
 import { getDatasources, fetchCapabilities, describeError, PLUGIN_ID } from '../../explorer/api';
 import { Explorer } from '../../explorer/components/Explorer';
+import { FavoritesProvider } from '../../explorer/favorites/FavoritesProvider';
+import { FavoritesOnlyLayout } from '../../explorer/favorites/components/FavoritesOnlyLayout';
 import { Capabilities } from '../../explorer/model';
 import { TimeRangeControl } from './TimeRangeControl';
 
-interface Props {}
+type Props = AppRootProps;
 
 /** Which step failed, so the alert can say what was being attempted. */
 interface LoadError {
@@ -37,7 +39,7 @@ function defaultTimeRange(): TimeRange {
   };
 }
 
-export const App: React.FC<Props> = () => {
+export const App: React.FC<Props> = ({ meta }) => {
   const styles = useStyles2(getStyles);
 
   const [datasources, setDatasources] = useState<SelectableValue[]>([]);
@@ -95,93 +97,117 @@ export const App: React.FC<Props> = () => {
   }, [selectedDS, loadCapabilities]);
 
   const refresh = useCallback(() => {
+    // A relative range ("last 1h") moves to the current time on every refresh.
+    setTimeRange((range) =>
+      typeof range.raw.from === 'string' || typeof range.raw.to === 'string'
+        ? rangeUtil.convertRawToRange(range.raw, 'browser')
+        : range
+    );
     setRefreshKey((value) => value + 1);
     if (selectedDS) {
       loadCapabilities(selectedDS);
     }
   }, [loadCapabilities, selectedDS]);
 
-  if (loading && !capabilities) {
-    return (
-      <div className={styles.center}>
-        <LoadingPlaceholder text="Loading VictoriaMetrics Explorer…" />
-      </div>
-    );
-  }
+  const favoriteDatasources = useMemo(
+    () => datasources.map((d) => ({ uid: String(d.value ?? ''), name: String(d.label ?? d.value ?? '') })),
+    [datasources]
+  );
 
   return (
-    <div className={styles.container}>
-      <div className={styles.toolbar}>
-        <div className={styles.toolbarLeft}>
-          <label className={styles.controlGroup}>
-            <span className={styles.controlLabel}>Datasource</span>
-            <Select
-              options={datasources}
-              value={selectedDS}
-              onChange={(v) => setSelectedDS(v.value ?? '')}
-              placeholder="Select datasource"
-              width={24}
+    // Favorites live outside the datasource branch: they load from Grafana and stay usable even
+    // when no datasource works.
+    <FavoritesProvider
+      pluginId={meta.id || PLUGIN_ID}
+      datasources={favoriteDatasources}
+      selectedDatasource={selectedDS}
+      timeRange={timeRange}
+      step={step}
+      refreshKey={refreshKey}
+    >
+      {loading && !capabilities ? (
+        <div className={styles.center}>
+          <LoadingPlaceholder text="Loading VictoriaMetrics Explorer…" />
+        </div>
+      ) : (
+        <div className={styles.container}>
+          <div className={styles.toolbar}>
+            <div className={styles.toolbarLeft}>
+              <label className={styles.controlGroup}>
+                <span className={styles.controlLabel}>Datasource</span>
+                {/* An open favorite runs on this datasource too, so it stays selectable. */}
+                <Select
+                  options={datasources}
+                  value={selectedDS}
+                  onChange={(v) => setSelectedDS(v.value ?? '')}
+                  placeholder="Select datasource"
+                  width={24}
+                />
+              </label>
+              {capabilities && (
+                <span className={styles.versionBadge}>
+                  {capabilities.upstreamProduct} {capabilities.upstreamVersion ?? ''}
+                </span>
+              )}
+            </div>
+            <div className={styles.toolbarRight}>
+              <label className={styles.controlGroup}>
+                <span className={styles.controlLabel}>Step</span>
+                <Select
+                  options={STEP_OPTIONS}
+                  value={step}
+                  onChange={(value) => setStep(value.value ?? 'auto')}
+                  width={16}
+                />
+              </label>
+              <div className={styles.controlGroup}>
+                <span className={styles.controlLabel}>Time range</span>
+                <TimeRangeControl value={timeRange} onChange={setTimeRange} />
+              </div>
+              <Button variant="secondary" size="sm" icon="sync" onClick={refresh} disabled={loading}>
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          {error && (
+            <Alert title={errorTitle(error, datasources)} severity="error">
+              <div>{error.detail}</div>
+              <div className={styles.errorHint}>
+                The full cause is in the Grafana server log (logger=plugin.{PLUGIN_ID}) and the browser console.
+              </div>
+            </Alert>
+          )}
+
+          {capabilities && selectedDS ? (
+            <Explorer
+              datasourceUID={selectedDS}
+              capabilities={capabilities}
+              timeRange={timeRange}
+              step={step}
+              refreshKey={refreshKey}
             />
-          </label>
-          {capabilities && (
-            <span className={styles.versionBadge}>
-              {capabilities.upstreamProduct} {capabilities.upstreamVersion ?? ''}
-            </span>
+          ) : (
+            <>
+              {!error && (
+                <Alert title="No datasource selected" severity="info">
+                  Add a VictoriaMetrics datasource (type “VictoriaMetrics”) to start exploring metrics.
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className={styles.createBtn}
+                    onClick={() => locationService.push('/connections/datasources/new')}
+                  >
+                    Create datasource
+                  </Button>
+                </Alert>
+              )}
+              <FavoritesOnlyLayout />
+            </>
           )}
         </div>
-        <div className={styles.toolbarRight}>
-          <label className={styles.controlGroup}>
-            <span className={styles.controlLabel}>Step</span>
-            <Select
-              options={STEP_OPTIONS}
-              value={step}
-              onChange={(value) => setStep(value.value ?? 'auto')}
-              width={16}
-            />
-          </label>
-          <div className={styles.controlGroup}>
-            <span className={styles.controlLabel}>Time range</span>
-            <TimeRangeControl value={timeRange} onChange={setTimeRange} />
-          </div>
-          <Button variant="secondary" size="sm" icon="sync" onClick={refresh} disabled={loading}>
-            Refresh
-          </Button>
-        </div>
-      </div>
-
-      {error && (
-        <Alert title={errorTitle(error, datasources)} severity="error">
-          <div>{error.detail}</div>
-          <div className={styles.errorHint}>
-            The full cause is in the Grafana server log (logger=plugin.{PLUGIN_ID}) and the browser console.
-          </div>
-        </Alert>
       )}
-
-      {capabilities && selectedDS ? (
-        <Explorer
-          datasourceUID={selectedDS}
-          capabilities={capabilities}
-          timeRange={timeRange}
-          step={step}
-          refreshKey={refreshKey}
-        />
-      ) : (
-        !error && (
-          <Alert title="No datasource selected" severity="info">
-            Add a VictoriaMetrics datasource (type “VictoriaMetrics”) to start exploring metrics.
-            <Button
-              variant="secondary"
-              size="sm"
-              className={styles.createBtn}
-              onClick={() => locationService.push('/connections/datasources/new')}
-            >
-              Create datasource
-            </Button>
-          </Alert>
-        )
-      )}
-    </div>
+    </FavoritesProvider>
   );
 };
 

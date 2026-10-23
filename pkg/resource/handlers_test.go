@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"testing"
 
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
@@ -38,7 +39,7 @@ func TestBuildMetricSelectorEscapesValues(t *testing.T) {
 func TestBuildChartQueryReturnsOneCounterSeries(t *testing.T) {
 	selector := `{__name__="coredns_kubernetes_rest_client_requests_total",job="coredns"}`
 
-	perSecond, aggregation, visualization := buildChartQuery("counter", selector, "5m", counterFuncRate)
+	perSecond, aggregation, visualization := buildChartQuery("counter", selector, "5m", counterFuncRate, nil)
 	if perSecond != `sum by () (rate({__name__="coredns_kubernetes_rest_client_requests_total",job="coredns"}[5m]))` {
 		t.Fatalf("unexpected per-second query: %s", perSecond)
 	}
@@ -46,7 +47,7 @@ func TestBuildChartQueryReturnsOneCounterSeries(t *testing.T) {
 		t.Fatalf("unexpected plan: aggregation=%s visualization=%s", aggregation, visualization)
 	}
 
-	perMinute, aggregation, _ := buildChartQuery("counter", selector, "5m", counterFuncIncrease)
+	perMinute, aggregation, _ := buildChartQuery("counter", selector, "5m", counterFuncIncrease, nil)
 	if perMinute != `sum by () (increase({__name__="coredns_kubernetes_rest_client_requests_total",job="coredns"}[5m]))` {
 		t.Fatalf("unexpected low-frequency counter query: %s", perMinute)
 	}
@@ -58,24 +59,53 @@ func TestBuildChartQueryReturnsOneCounterSeries(t *testing.T) {
 func TestBuildChartQueryUsesRequestedWindow(t *testing.T) {
 	selector := `{__name__="dotnet_process_cpu_time_seconds_total"}`
 
-	perMinute, _, _ := buildChartQuery("counter", selector, "1m", counterFuncIncrease)
+	perMinute, _, _ := buildChartQuery("counter", selector, "1m", counterFuncIncrease, nil)
 	if want := `sum by () (increase({__name__="dotnet_process_cpu_time_seconds_total"}[1m]))`; perMinute != want {
 		t.Fatalf("unexpected increase query\nwant: %s\n got: %s", want, perMinute)
 	}
 
-	perSecond, _, _ := buildChartQuery("counter", selector, "15m", counterFuncRate)
+	perSecond, _, _ := buildChartQuery("counter", selector, "15m", counterFuncRate, nil)
 	if want := `sum by () (rate({__name__="dotnet_process_cpu_time_seconds_total"}[15m]))`; perSecond != want {
 		t.Fatalf("unexpected rate query\nwant: %s\n got: %s", want, perSecond)
 	}
 
-	heatmap, _, viz := buildChartQuery("histogram", selector, "30s", "")
+	heatmap, _, viz := buildChartQuery("histogram", selector, "30s", "", nil)
 	if want := `sum by (le) (rate({__name__="dotnet_process_cpu_time_seconds_total"}[30s]))`; heatmap != want || viz != "heatmap" {
 		t.Fatalf("unexpected histogram query: %s (%s)", heatmap, viz)
 	}
-	perMinuteHeatmap, aggregation, _ := buildChartQuery("histogram", selector, "1m", counterFuncIncrease)
+	perMinuteHeatmap, aggregation, _ := buildChartQuery("histogram", selector, "1m", counterFuncIncrease, nil)
 	if want := `sum by (le) (increase({__name__="dotnet_process_cpu_time_seconds_total"}[1m]))`; perMinuteHeatmap != want ||
 		aggregation != "sum_by_le_increase" {
 		t.Fatalf("unexpected per-minute histogram query: %s (%s)", perMinuteHeatmap, aggregation)
+	}
+}
+
+func TestBuildChartQueryGroupBy(t *testing.T) {
+	selector := `{__name__="http_requests_total"}`
+	groupBy := []string{"job", "instance"}
+
+	counter, aggregation, viz := buildChartQuery("counter", selector, "5m", counterFuncRate, groupBy)
+	if want := `sum by (job, instance) (rate({__name__="http_requests_total"}[5m]))`; counter != want ||
+		aggregation != "sum_rate" || viz != "timeseries" {
+		t.Fatalf("unexpected grouped counter query: %s (%s, %s)", counter, aggregation, viz)
+	}
+	gauge, _, _ := buildChartQuery("gauge", selector, "5m", "", []string{"job"})
+	if want := `sum by (job) ({__name__="http_requests_total"})`; gauge != want {
+		t.Fatalf("unexpected grouped gauge query: %s", gauge)
+	}
+	heatmap, _, _ := buildChartQuery("histogram", selector, "5m", "", groupBy)
+	if want := `sum by (le) (rate({__name__="http_requests_total"}[5m]))`; heatmap != want {
+		t.Fatalf("a histogram must ignore group by: %s", heatmap)
+	}
+}
+
+func TestGroupByLabels(t *testing.T) {
+	got := groupByLabels([]string{"job", "__name__", "bad-label", "", "instance", "job"})
+	if want := []string{"job", "instance"}; !slices.Equal(got, want) {
+		t.Fatalf("unexpected group by labels: %v, want %v", got, want)
+	}
+	if got := groupByLabels(nil); len(got) != 0 {
+		t.Fatalf("unexpected group by labels for none: %v", got)
 	}
 }
 

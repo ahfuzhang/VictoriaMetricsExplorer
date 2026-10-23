@@ -34,11 +34,24 @@ import {
   useStyles2,
   useTheme2,
 } from '@grafana/ui';
-import { config, getDataSourceSrv } from '@grafana/runtime';
 import { css } from '@emotion/css';
 
 import { ChartPlan, HistogramTable, StatTable } from '../model';
 import { fetchChartPlan, queryChartData, describeError } from '../api';
+import {
+  BYTE_UNITS,
+  DURATION_UNITS,
+  bucketFormatter,
+  formatScaledBound,
+  grafanaUnit,
+  isBytesMetric,
+  planUnitToUnitId,
+  scaleValue,
+  splitRateUnit,
+} from '../favorites/units';
+import { HISTOGRAM_RATE_MODE_OPTIONS, RATE_MODE_OPTIONS, type RateMode } from '../favorites/rateMode';
+import { MAX_DRAWN_SERIES } from '../favorites/limits';
+import { Centered, HeatmapView, MultiSeriesChart, exploreUrl, formatCount, useElementSize } from './chartParts';
 import type { SelectedFilters } from './Explorer';
 
 interface Props {
@@ -50,29 +63,30 @@ interface Props {
   timeRange: TimeRange;
   step: string;
   refreshKey: number;
-  isFavorite: boolean;
-  onToggleFavorite: () => void;
+  /** Labels a counter or gauge curve is summed by, one curve per value combination. */
+  groupBy: string[];
+  /** The labels the current filters leave more than one value of; groupBy picks among them. */
+  groupByOptions: string[];
+  /** groupByOptions are still those of the previous filters: a grouped chart waits for the new ones. */
+  groupByPending: boolean;
+  onGroupByChange: (labels: string[]) => void;
+  /** Open the save dialog with the plan of the chart currently shown. */
+  onFavorite: (snapshot: ChartSnapshot) => void;
+  /** Why saving to favorites is impossible here; the button is disabled with this as its tooltip. */
+  favoriteBlocked?: string | null;
+}
+
+/** The chart a Favorite click saves: the plan of the request currently on screen. */
+export interface ChartSnapshot {
+  datasourceUID: string;
+  metric: string;
+  plan: ChartPlan;
 }
 
 type VisualizationKind = 'timeseries' | 'heatmap' | 'stat';
 
-type RateMode = 'rate' | 'increase' | 'irate';
-
-// Counter functions offered under a counter's line chart. The backend reports the one it used as
-// the plan aggregation (sum_rate, sum_increase, sum_irate).
-const RATE_MODE_OPTIONS: Array<{ label: string; value: RateMode }> = [
-  { label: 'per second', value: 'rate' },
-  { label: 'per minute', value: 'increase' },
-  { label: 'per second (irate)', value: 'irate' },
-];
-
-// Bucket functions offered under a histogram's heatmap; the plan aggregation is sum_by_le_rate or
-// sum_by_le_increase.
-const HISTOGRAM_RATE_MODE_OPTIONS: Array<{ label: string; value: RateMode }> = [
-  { label: 'per second', value: 'rate' },
-  { label: 'per minute', value: 'increase' },
-];
-
+// The backend reports the counter function it used as the plan aggregation (sum_rate,
+// sum_increase, sum_irate); a heatmap's is sum_by_le_rate or sum_by_le_increase.
 function rateModeFromAggregation(aggregation: string | undefined): RateMode | undefined {
   return RATE_MODE_OPTIONS.find((option) => aggregation === `sum_${option.value}`)?.value;
 }
@@ -101,18 +115,23 @@ export const ChartPanel: React.FC<Props> = ({
   timeRange,
   step,
   refreshKey,
-  isFavorite,
-  onToggleFavorite,
+  groupBy,
+  groupByOptions,
+  groupByPending,
+  onGroupByChange,
+  onFavorite,
+  favoriteBlocked,
 }) => {
   const styles = useStyles2(getStyles);
   const filterKey = useMemo(() => JSON.stringify(filters), [filters]);
+  const groupKey = groupBy.join(',');
   const startMs = timeRange.from.valueOf();
   const endMs = timeRange.to.valueOf();
   // A rate mode picked in the footer applies to the metric it was picked for; another metric starts
   // with the backend's automatic choice again.
   const [rateModeChoice, setRateModeChoice] = useState<{ metric: string; mode: RateMode } | null>(null);
   const rateMode = rateModeChoice?.metric === metric ? rateModeChoice.mode : undefined;
-  const requestKey = `${datasourceUID}:${metric}:${podGroup ?? ''}:${node ?? ''}:${filterKey}:${startMs}:${endMs}:${step}:${rateMode ?? ''}:${refreshKey}`;
+  const requestKey = `${datasourceUID}:${metric}:${podGroup ?? ''}:${node ?? ''}:${filterKey}:${startMs}:${endMs}:${step}:${rateMode ?? ''}:${groupKey}:${refreshKey}`;
   const [result, setResult] = useState<ChartResult>({
     requestKey: '',
     plan: null,
@@ -135,6 +154,9 @@ export const ChartPanel: React.FC<Props> = ({
   const loadingData = currentResult?.stage === 'data';
 
   useEffect(() => {
+    if (groupByPending) {
+      return;
+    }
     const generation = ++generationRef.current;
     let nextPlan: ChartPlan | null = null;
 
@@ -149,6 +171,7 @@ export const ChartPanel: React.FC<Props> = ({
           endMs,
           step,
           rateMode,
+          groupBy,
         });
         if (generation !== generationRef.current) {
           return;
@@ -205,12 +228,15 @@ export const ChartPanel: React.FC<Props> = ({
     return () => {
       generationRef.current += 1;
     };
-    // filterKey is the stable, serializable dependency for the filter map.
+    // filterKey and groupKey are the stable, serializable dependencies for the filter map and the
+    // group-by labels.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     datasourceUID,
     endMs,
     filterKey,
+    groupByPending,
+    groupKey,
     metric,
     node,
     podGroup,
@@ -225,6 +251,15 @@ export const ChartPanel: React.FC<Props> = ({
   const visualization = visualizationKind(plan?.visualization);
   const activeRateMode = visualization === 'timeseries' ? rateModeFromAggregation(plan?.aggregation) : undefined;
   const selectedFilterCount = Object.values(filters).reduce((count, values) => count + values.length, 0);
+  const planGroupBy = plan?.groupBy ?? [];
+  // The labels stay on screen while a new chart loads: the last plan of this metric decides.
+  const lastPlan = plan ?? (result.plan?.metric === metric ? result.plan : null);
+  const groupable =
+    lastPlan !== null &&
+    visualizationKind(lastPlan.visualization) === 'timeseries' &&
+    (lastPlan.metricType === 'counter' || lastPlan.metricType === 'gauge');
+  const toggleGroupBy = (label: string) =>
+    onGroupByChange(groupBy.includes(label) ? groupBy.filter((picked) => picked !== label) : [...groupBy, label]);
 
   return (
     <div className={styles.container}>
@@ -244,13 +279,17 @@ export const ChartPanel: React.FC<Props> = ({
           </div>
         </div>
         <Button
-          variant={isFavorite ? 'primary' : 'secondary'}
+          variant="secondary"
           size="sm"
           icon="star"
-          aria-label={isFavorite ? 'Remove metric from favorites' : 'Add metric to favorites'}
-          onClick={onToggleFavorite}
+          aria-label="Save this chart to favorites"
+          // Only once the plan of the current request is known: that is the query a favorite saves.
+          // A failed data query can still be saved.
+          disabled={!plan || !!favoriteBlocked}
+          tooltip={favoriteBlocked ?? (plan ? undefined : 'Available once the chart query is ready')}
+          onClick={() => plan && onFavorite({ datasourceUID, metric, plan })}
         >
-          {isFavorite ? 'Saved' : 'Favorite'}
+          Favorite
         </Button>
       </div>
 
@@ -313,10 +352,37 @@ export const ChartPanel: React.FC<Props> = ({
             unit={plan?.unit ?? ''}
             serverSum={serverSum}
             heatmapRateUnit={histogramRateModeFromAggregation(plan?.aggregation) === 'increase' ? '/min' : '/s'}
+            groupBy={planGroupBy}
           />
         )}
         {loadingData && frameData.length > 0 && <div className={styles.refreshing}>Refreshing…</div>}
       </div>
+
+      {groupable && (
+        <div className={styles.groupBy} role="group" aria-label="Sum by labels">
+          <span className={styles.groupByTitle}>sum by</span>
+          {groupByOptions.length === 0 ? (
+            <span className={styles.groupByEmpty}>No label splits the matching series</span>
+          ) : (
+            groupByOptions.map((label) => {
+              const picked = groupBy.includes(label);
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  className={`${styles.groupByLabel} ${picked ? styles.groupByLabelPicked : ''}`}
+                  aria-pressed={picked}
+                  title={picked ? `Stop splitting the curve by ${label}` : `One curve per ${label} value`}
+                  onClick={() => toggleGroupBy(label)}
+                >
+                  {picked && <span className={styles.checkMark}>✓</span>}
+                  {label}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
 
       {visualization === 'heatmap' && plan && !queryError && (
         <div className={styles.histogramRateMode}>
@@ -337,9 +403,13 @@ export const ChartPanel: React.FC<Props> = ({
 
       <div className={styles.footer}>
         <span>
-          {visualization === 'timeseries'
-            ? '1 chart · aggregated series'
-            : `${frameData.length} data frame${frameData.length === 1 ? '' : 's'}`}
+          {visualization !== 'timeseries'
+            ? `${frameData.length} data frame${frameData.length === 1 ? '' : 's'}`
+            : planGroupBy.length > 0
+              ? `${frameData.length} series · sum by (${planGroupBy.join(', ')})${
+                  frameData.length > MAX_DRAWN_SERIES ? ` · first ${MAX_DRAWN_SERIES} drawn` : ''
+                }`
+              : '1 chart · aggregated series'}
         </span>
         {activeRateMode && (
           <RadioButtonGroup
@@ -354,31 +424,6 @@ export const ChartPanel: React.FC<Props> = ({
   );
 };
 
-// Grafana Explore URL with one pane holding the query on the same datasource, time range and step.
-// Relative ranges such as now-6h are kept as-is so Explore can still refresh them.
-function exploreUrl(datasourceUID: string, expr: string, step: string, timeRange: TimeRange): string {
-  const datasource = { type: getDataSourceSrv().getInstanceSettings(datasourceUID)?.type, uid: datasourceUID };
-  const rangeValue = (raw: TimeRange['raw']['from']) => (typeof raw === 'string' ? raw : String(raw.valueOf()));
-  const panes = {
-    explorer: {
-      datasource: datasourceUID,
-      queries: [{ refId: 'A', datasource, expr, interval: step, range: true, instant: false }],
-      range: { from: rangeValue(timeRange.raw.from), to: rangeValue(timeRange.raw.to) },
-    },
-  };
-  const params = new URLSearchParams({
-    schemaVersion: '1',
-    panes: JSON.stringify(panes),
-    orgId: String(config.bootData.user.orgId),
-  });
-  return `${config.appSubUrl}/explore?${params.toString()}`;
-}
-
-const Centered: React.FC<React.PropsWithChildren> = ({ children }) => {
-  const styles = useStyles2(getStyles);
-  return <div className={styles.center}>{children}</div>;
-};
-
 interface VisualizationProps {
   kind: VisualizationKind;
   frames: DataFrame[];
@@ -388,6 +433,8 @@ interface VisualizationProps {
   serverSum: number | null;
   /** Rate unit of the heatmap cells: /s for rate, /min for increase. */
   heatmapRateUnit: string;
+  /** Labels a time series is summed by; with any, each returned series is its own curve. */
+  groupBy: string[];
 }
 
 const Visualization: React.FC<VisualizationProps> = ({
@@ -398,6 +445,7 @@ const Visualization: React.FC<VisualizationProps> = ({
   unit,
   serverSum,
   heatmapRateUnit,
+  groupBy,
 }) => {
   const styles = useStyles2(getStyles);
   const theme = useTheme2();
@@ -419,6 +467,14 @@ const Visualization: React.FC<VisualizationProps> = ({
         <StatView frames={displayFrames} metric={metric} unit={unit} />
       ) : kind === 'heatmap' ? (
         <HeatmapView frames={displayFrames} formatBucket={bucketFormatter(metric)} rateUnit={heatmapRateUnit} />
+      ) : groupBy.length > 0 ? (
+        // The legend under the plot names the label values of each curve's color.
+        <MultiSeriesChart
+          frames={displayFrames.slice(0, MAX_DRAWN_SERIES)}
+          unitId={planUnitToUnitId(unit)}
+          range={timeRange}
+          unlabeledName={`{${groupBy.map((label) => `${label}=""`).join(',')}}`}
+        />
       ) : (
         <LineChartView frames={displayFrames} timeRange={timeRange} unit={unit} serverSum={serverSum} />
       )}
@@ -575,53 +631,6 @@ const ChartStat: React.FC<{
   </div>
 );
 
-/** Track an element's content size; reports 0x0 until the element is mounted and measured. */
-function useElementSize<T extends HTMLElement>(): [(element: T | null) => void, { width: number; height: number }] {
-  const [element, setElement] = useState<T | null>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
-
-  useEffect(() => {
-    if (!element) {
-      return;
-    }
-    const observer = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
-      setSize({ width: Math.floor(width), height: Math.floor(height) });
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [element]);
-
-  return [setElement, size];
-}
-
-// A counter of bytes or seconds is plotted as a rate of that unit, e.g. "bytes/s" or "s/min": the
-// values are scaled in the base unit (KiB, MiB…, ms, µs…) and the rate is appended after it.
-const RATE_UNIT = /^(bytes|s)(\/(?:s|min))$/;
-
-function splitRateUnit(unit: string): { base: string; rate: string } {
-  const match = RATE_UNIT.exec(unit);
-  return match ? { base: match[1], rate: match[2] } : { base: unit, rate: '' };
-}
-
-/** Map the plan's display unit to a Grafana unit id; anything unrecognized is shown as a suffix. */
-function grafanaUnit(unit: string): string | undefined {
-  switch (unit) {
-    case '':
-      return undefined;
-    case 's':
-      return 's';
-    case 'bytes':
-      return 'bytes';
-    case '°C':
-      return 'celsius';
-    case '%':
-      return 'percent';
-    default:
-      return `suffix:${unit}`;
-  }
-}
-
 /** Turn the one plotted series into a DataFrame TimeSeries can draw, or null when there is none. */
 function plotFrame(series: LineSeries[], unit: string, theme: GrafanaTheme2): DataFrame | null {
   const [first] = series;
@@ -732,114 +741,8 @@ const StatView: React.FC<{ frames: DataFrame[]; metric: string; unit: string }> 
   );
 };
 
-const HeatmapView: React.FC<{ frames: DataFrame[]; formatBucket: (bound: string) => string; rateUnit: string }> = ({
-  frames,
-  formatBucket,
-  rateUnit,
-}) => {
-  const styles = useStyles2(getStyles);
-  const rows = heatmapRows(frames);
-  const values = rows.flatMap((row) => row.values);
-  const minimum = values.length > 0 ? Math.min(...values) : 0;
-  const maximum = Math.max(0, ...values);
-
-  if (rows.length === 0) {
-    return <Centered>No histogram buckets were returned.</Centered>;
-  }
-
-  return (
-    <div className={styles.heatmap} aria-label="Histogram heatmap">
-      {rows.map((row) => (
-        <div className={styles.heatmapRow} key={row.label}>
-          <span className={styles.heatmapLabel} title={row.label}>
-            {formatBucket(row.label)}
-          </span>
-          <div
-            className={styles.heatmapCells}
-            style={{ gridTemplateColumns: `repeat(${Math.max(row.values.length, 1)}, minmax(3px, 1fr))` }}
-          >
-            {row.values.map((value, index) => (
-              <span
-                key={index}
-                className={styles.heatmapCell}
-                style={{ opacity: maximum > 0 ? Math.max(0.08, value / maximum) : 0.08 }}
-                title={`${formatBucket(row.label)}: ${formatCount(value)}${rateUnit}`}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
-      <div className={styles.heatmapLegend}>
-        <span>
-          lower <b className={styles.heatmapLegendValue}>{formatCount(minimum)}</b>
-        </span>
-        <span className={styles.heatmapGradient} />
-        <span>
-          higher <b className={styles.heatmapLegendValue}>{formatCount(maximum)}</b> {rateUnit}
-        </span>
-      </div>
-    </div>
-  );
-};
-
-// Observation counts come from increase(), which can be fractional; percentages keep two decimals.
-const formatCount = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+// Percentages keep two decimals.
 const formatPercent = (value: number) => `${value.toFixed(2)}%`;
-
-// Histogram bucket bounds are shown in the unit the metric name ends with: "<prefix>_seconds" as s,
-// ms, us or ns, and "<prefix>_bytes" as B, KB, MB, GB and so on. Other histograms keep the bounds as
-// exported.
-function bucketFormatter(metric: string): (bound: string) => string {
-  const base = metric.replace(/_bucket$/, '');
-  if (base.endsWith('_seconds')) {
-    return (bound) => formatScaledBound(bound, DURATION_UNITS);
-  }
-  if (isBytesMetric(base)) {
-    return (bound) => formatScaledBound(bound, BYTE_UNITS);
-  }
-  return (bound) => bound;
-}
-
-// A stat or histogram whose name ends with "_bytes" is shown in B, KB, MB, GB and so on.
-function isBytesMetric(metric: string): boolean {
-  return metric.endsWith('_bytes');
-}
-
-// Units from largest to smallest; a bound takes the first unit it reaches, or the last one.
-const DURATION_UNITS: Array<[number, string]> = [
-  [1, 's'],
-  [1e-3, 'ms'],
-  [1e-6, 'us'],
-  [1e-9, 'ns'],
-];
-
-const BYTE_UNITS: Array<[number, string]> = [
-  [1024 ** 5, 'PB'],
-  [1024 ** 4, 'TB'],
-  [1024 ** 3, 'GB'],
-  [1024 ** 2, 'MB'],
-  [1024, 'KB'],
-  [1, 'B'],
-];
-
-function formatScaledBound(bound: string, units: Array<[number, string]>): string {
-  const value = Number(bound);
-  if (!Number.isFinite(value) || value === 0) {
-    return bound;
-  }
-  const [text, unit] = scaleValue(value, units);
-  return `${text}${unit}`;
-}
-
-/** Scale a value into the largest unit it reaches, e.g. 0.0042 s -> ["4.2", "ms"]. */
-function scaleValue(value: number, units: Array<[number, string]>): [string, string] {
-  if (!Number.isFinite(value) || value === 0) {
-    return [Number.isFinite(value) ? '0' : String(value), units[0][1]];
-  }
-  const [scale, unit] = units.find(([unitScale]) => Math.abs(value) >= unitScale) ?? units[units.length - 1];
-  // toPrecision drops float noise such as 0.30000000000000004 and the padding of "1.136e+00".
-  return [String(Number((value / scale).toPrecision(4))), unit];
-}
 
 type Percentile = 'p50' | 'p90' | 'p95' | 'p99';
 
@@ -1045,39 +948,6 @@ function lineSeries(frames: DataFrame[]): LineSeries[] {
   return result;
 }
 
-interface HeatmapRow {
-  label: string;
-  values: number[];
-}
-
-function heatmapRows(frames: DataFrame[]): HeatmapRow[] {
-  const rows: HeatmapRow[] = [];
-  for (const frame of frames) {
-    for (const field of frame.fields) {
-      if (field.type !== FieldType.number) {
-        continue;
-      }
-      const label = field.labels?.le ?? field.labels?.vmrange ?? frame.name ?? field.name;
-      const values = Array.from({ length: field.values.length }, (_, index) => Number(field.values[index]))
-        .filter(Number.isFinite)
-        .slice(-100);
-      if (values.length > 0) {
-        rows.push({ label, values });
-      }
-    }
-  }
-
-  return rows
-    .sort((left, right) => bucketSortValue(left.label) - bucketSortValue(right.label))
-    .slice(-30)
-    .reverse();
-}
-
-function bucketSortValue(label: string): number {
-  const value = Number(label.replace(/^.*(?:le|vmrange)[=:]/, '').replace(/["{}]/g, ''));
-  return Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
-}
-
 const getStyles = (theme: GrafanaTheme2) => ({
   container: css({
     display: 'flex',
@@ -1183,16 +1053,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     overflow: 'hidden',
     padding: theme.spacing(1),
   }),
-  center: css({
-    display: 'flex',
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-    height: '100%',
-    minHeight: 0,
-    paddingTop: theme.spacing(4),
-    color: theme.colors.text.secondary,
-    textAlign: 'center',
-  }),
   visualization: css({
     width: '100%',
     height: '100%',
@@ -1211,6 +1071,56 @@ const getStyles = (theme: GrafanaTheme2) => ({
     background: theme.colors.background.secondary,
     color: theme.colors.text.secondary,
     fontSize: theme.typography.size.xs,
+  }),
+  groupBy: css({
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    padding: theme.spacing(0.75, 1),
+    borderTop: `1px solid ${theme.colors.border.weak}`,
+    flexShrink: 0,
+  }),
+  groupByTitle: css({
+    marginRight: theme.spacing(0.5),
+    color: theme.colors.text.secondary,
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.size.xs,
+  }),
+  groupByEmpty: css({
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.size.xs,
+  }),
+  // Styled like the label value buttons of the label column.
+  groupByLabel: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    padding: theme.spacing(0.25, 0.75),
+    border: `1px solid ${theme.colors.border.medium}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.background.secondary,
+    color: theme.colors.text.primary,
+    cursor: 'pointer',
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.size.xs,
+    lineHeight: 1.35,
+    '&:hover': {
+      borderColor: theme.colors.primary.border,
+      background: theme.colors.action.hover,
+    },
+  }),
+  groupByLabelPicked: css({
+    borderColor: theme.colors.primary.border,
+    background: theme.colors.primary.transparent,
+    color: theme.colors.primary.text,
+    '&:hover': {
+      background: theme.colors.primary.transparent,
+    },
+  }),
+  checkMark: css({
+    fontFamily: theme.typography.fontFamily,
+    fontSize: '10px',
   }),
   footer: css({
     display: 'flex',
@@ -1311,51 +1221,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     fontSize: theme.typography.size.xs,
     overflowWrap: 'anywhere',
   }),
-  heatmap: css({
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
-    height: '100%',
-    minHeight: '280px',
-    overflow: 'auto',
-    padding: theme.spacing(1),
-  }),
-  heatmapRow: css({
-    display: 'grid',
-    gridTemplateColumns: '76px 1fr',
-    alignItems: 'center',
-    gap: theme.spacing(0.75),
-    flex: 1,
-    minHeight: '8px',
-  }),
-  heatmapLabel: css({
-    color: theme.colors.text.secondary,
-    fontFamily: theme.typography.fontFamilyMonospace,
-    fontSize: theme.typography.size.xs,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    textAlign: 'right',
-  }),
-  heatmapCells: css({
-    display: 'grid',
-    gap: '1px',
-    alignSelf: 'stretch',
-  }),
-  heatmapCell: css({
-    display: 'block',
-    minHeight: '8px',
-    background: theme.colors.primary.main,
-  }),
-  heatmapLegend: css({
-    display: 'flex',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    gap: theme.spacing(0.5),
-    marginTop: theme.spacing(0.75),
-    color: theme.colors.text.secondary,
-    fontSize: theme.typography.size.xs,
-  }),
   histogramRateMode: css({
     display: 'flex',
     justifyContent: 'flex-end',
@@ -1435,16 +1300,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     margin: theme.spacing(0.5, 0.75),
     color: theme.colors.text.secondary,
     fontSize: theme.typography.size.xs,
-  }),
-  heatmapLegendValue: css({
-    color: theme.colors.text.primary,
-    fontWeight: theme.typography.fontWeightMedium,
-    fontVariantNumeric: 'tabular-nums',
-  }),
-  heatmapGradient: css({
-    width: '80px',
-    height: '6px',
-    background: `linear-gradient(90deg, ${theme.colors.background.secondary}, ${theme.colors.primary.main})`,
   }),
 });
 

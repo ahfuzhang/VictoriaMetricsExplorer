@@ -31,6 +31,8 @@ interface Call<Req extends DescMessage, Res extends DescMessage> {
   response: Res;
   request?: { schema: Req; init: MessageInitShape<Req> };
   showErrorAlert?: boolean;
+  /** Aborting it cancels the request; the call then rejects. */
+  abortSignal?: AbortSignal;
 }
 
 /** Send a request in the wire format and decode the response message. */
@@ -57,6 +59,7 @@ export async function callProto<Req extends DescMessage, Res extends DescMessage
         headers,
         responseType: 'arraybuffer',
         showErrorAlert: call.showErrorAlert,
+        abortSignal: call.abortSignal,
       })
     );
   } catch (err) {

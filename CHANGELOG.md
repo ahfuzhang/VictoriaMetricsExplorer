@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Per-user favorites kept on the Grafana server (User Storage API), restored in any browser after
+  signing in: a menu of folders and favorites, each favorite holding up to 20 saved queries of 1–10
+  statements (expression, datasource, unit, visualization and the browse source they came from)
+- ★ Favorite on the chart opens a save dialog prefilled with the chart's final expression, unit and
+  visualization; save into a new or existing favorite (append or replace a query)
+- Opening a favorite replaces columns 2–4 with its query list and one wide column that charts every
+  query top to bottom, one row per statement. Clicking a query in the list scrolls to it
+- Saved charts run on the toolbar's datasource, time range and Step, so one favorite can be looked
+  at on any datasource; the datasource a statement was saved with is used only when none is
+  selected, and the statement editor no longer asks for one. In statements saved from a chart, the
+  window of rate(), increase() and irate() (the Step when it was saved) follows the current Step.
+  Hand-written expressions keep their windows
+- Beside each saved counter chart, per second / per minute / per second (irate) switch the
+  expression's rate(), increase() or irate() for the current view (heatmaps: per second / per
+  minute); the saved statement is not changed
+- Edit dialog for a favorite's queries (with per-statement try run) and a Settings dialog to create
+  folders and to rename, reorder, move (drag and drop or keyboard) and delete folders and favorites
+- Concurrent windows and browsers never overwrite each other: every write is conditional on the
+  resource version, conflicting saves are replayed on the latest data, and a save whose response was
+  lost is checked instead of repeated
+- Favorites stay usable when no datasource can be reached
+- Saving needs Grafana 12.3.0 or later (older versions can lose concurrent updates); favorites are
+  read-only below that (docs/userstorage_p0.md)
+- "sum by" under a counter or gauge chart: pick one or more label names to draw one curve per label
+  value combination (`sum by (job, instance)`), with a legend naming each curve's label values and
+  its min, max, mean and last. Only labels with more than one value among the series the label
+  filters leave are offered; a label the filters reduce to one value is unpicked
+
+### Changed
+
+- Refresh moves a relative time range ("last 1 hour") to the current time
+
+### Removed
+
+- Browser-local favorites (`vm_explorer_favorites`) and the Workspace › Favorites scope
+
 ## 0.1.0 (Unreleased)
 
 ### Added

@@ -7,7 +7,7 @@ import { Capabilities, MetricInfo, MetricKind } from '../model';
 import { fetchMetricIndex, fetchMetricTypes, describeError } from '../api';
 import type { MetricScope } from './Explorer';
 
-// One request per page of names; the backend caps a request at 500, favorites can exceed a page.
+// One request per page of names; the backend caps a request at 500.
 const TYPE_REQUEST_SIZE = 200;
 
 const NO_TYPES: Record<string, MetricKind> = {};
@@ -27,7 +27,6 @@ interface Props {
   capabilities: Capabilities;
   selectedMetric: string;
   scope: MetricScope;
-  favoriteMetrics: string[];
   timeRange: TimeRange;
   refreshKey: number;
   onSelectMetric: (metric: string) => void;
@@ -38,7 +37,6 @@ export const MetricList: React.FC<Props> = ({
   capabilities,
   selectedMetric,
   scope,
-  favoriteMetrics,
   timeRange,
   refreshKey,
   onSelectMetric,
@@ -139,7 +137,6 @@ export const MetricList: React.FC<Props> = ({
           group: scope.kind === 'group' ? scope.group : undefined,
           podGroup: scope.kind === 'pod' ? scope.group : undefined,
           node: scope.kind === 'node' ? scope.node : undefined,
-          metrics: scope.kind === 'favorites' ? favoriteMetrics : undefined,
           page: pageNumber,
           pageSize,
           sort: 'name',
@@ -173,7 +170,7 @@ export const MetricList: React.FC<Props> = ({
         }
       }
     },
-    [datasourceUID, favoriteMetrics, pageSize, scope, search, timeRange]
+    [datasourceUID, pageSize, scope, search, timeRange]
   );
 
   useEffect(() => {
@@ -181,19 +178,9 @@ export const MetricList: React.FC<Props> = ({
     setMetrics([]);
     setPage(1);
 
-    if (scope.kind === 'favorites' && favoriteMetrics.length === 0) {
-      metricsOwnerRef.current = datasourceUID;
-      setTotalCount(0);
-      setTotalPages(1);
-      setTruncated(false);
-      setLoading(false);
-      setError('');
-      return;
-    }
-
     const timer = window.setTimeout(() => loadMetrics(1, false), 300);
     return () => window.clearTimeout(timer);
-  }, [datasourceUID, favoriteMetrics, loadMetrics, refreshKey, scope.kind, search]);
+  }, [datasourceUID, loadMetrics, refreshKey, scope.kind, search]);
 
   const handleScroll = useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
@@ -229,9 +216,7 @@ export const MetricList: React.FC<Props> = ({
         ? `Pod: ${scope.group} (${scope.pods.length} pod${scope.pods.length !== 1 ? 's' : ''})`
         : scope.kind === 'node'
           ? `Node: ${scope.node}`
-          : scope.kind === 'favorites'
-            ? 'Favorites'
-            : 'All metrics';
+          : 'All metrics';
 
   return (
     <div className={styles.container}>
@@ -262,11 +247,7 @@ export const MetricList: React.FC<Props> = ({
             <LoadingPlaceholder text="Loading metrics…" />
           </div>
         ) : metrics.length === 0 ? (
-          !error && (
-            <div className={styles.empty}>
-              {scope.kind === 'favorites' ? 'No favorite metrics match this search.' : 'No metrics found.'}
-            </div>
-          )
+          !error && <div className={styles.empty}>No metrics found.</div>
         ) : visibleMetrics.length === 0 && !loading && !typesPending ? (
           <div className={styles.empty}>No metrics of this type.</div>
         ) : (

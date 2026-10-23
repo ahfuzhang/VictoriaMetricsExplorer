@@ -4,13 +4,14 @@ import { Alert, IconButton, LoadingPlaceholder, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
 import { fetchMetricIndex, fetchNodeGroups, fetchPodGroups, describeError, PodGroup } from '../api';
+import { useFavorites } from '../favorites/FavoritesProvider';
+import { FavoritesMenu } from '../favorites/components/FavoritesMenu';
 import type { MetricScope } from './Explorer';
 
 interface Props {
   datasourceUID: string;
   timeRange: TimeRange;
   scope: MetricScope;
-  favoriteCount: number;
   collapsed: boolean;
   onScopeChange: (scope: MetricScope) => void;
   onToggleCollapsed: () => void;
@@ -24,13 +25,15 @@ interface GroupItem {
 export const TreeView: React.FC<Props> = ({
   datasourceUID,
   timeRange,
-  scope,
-  favoriteCount,
+  scope: currentScope,
   collapsed,
   onScopeChange,
   onToggleCollapsed,
 }) => {
   const styles = useStyles2(getStyles);
+  // While a favorite is open, no browse scope is highlighted; picking one returns to browsing.
+  const { selection } = useFavorites();
+  const scope: MetricScope | null = selection ? null : currentScope;
   const [groups, setGroups] = useState<GroupItem[]>([]);
   const [metricCount, setMetricCount] = useState(0);
   // Branches start collapsed and only fetch their data once the user first expands them.
@@ -49,7 +52,6 @@ export const TreeView: React.FC<Props> = ({
   const [nodesRequested, setNodesRequested] = useState(false);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [nodesError, setNodesError] = useState('');
-  const [workspaceExpanded, setWorkspaceExpanded] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -187,156 +189,138 @@ export const TreeView: React.FC<Props> = ({
       </div>
 
       {!collapsed && (
-        <div className={styles.tree} role="tree" aria-label="Metric scopes">
-          <div role="treeitem" aria-expanded={podsExpanded}>
-            <button
-              type="button"
-              className={styles.branch}
-              onClick={() => {
-                setPodsExpanded((expanded) => !expanded);
-                setPodsRequested(true);
-              }}
-            >
-              <span className={styles.chevron}>{podsExpanded ? '▾' : '▸'}</span>
-              <span>By Pod</span>
-              <span className={styles.count} title={`${podCount} pods`}>
-                {podGroups.length || '—'}
-              </span>
-            </button>
+        <div className={styles.tree}>
+          <div role="tree" aria-label="Metric scopes">
+            <div role="treeitem" aria-expanded={podsExpanded}>
+              <button
+                type="button"
+                className={styles.branch}
+                onClick={() => {
+                  setPodsExpanded((expanded) => !expanded);
+                  setPodsRequested(true);
+                }}
+              >
+                <span className={styles.chevron}>{podsExpanded ? '▾' : '▸'}</span>
+                <span>By Pod</span>
+                <span className={styles.count} title={`${podCount} pods`}>
+                  {podGroups.length || '—'}
+                </span>
+              </button>
 
-            {podsExpanded && (
-              <div className={styles.children} role="group">
-                {podsLoading && (
-                  <div className={styles.loading}>
-                    <LoadingPlaceholder text="Loading pods…" />
-                  </div>
-                )}
-                {!podsLoading && podGroups.length === 0 && !podsError && (
-                  <div className={styles.empty}>No series carry a “{podLabel}” label.</div>
-                )}
-                {!podsLoading &&
-                  podGroups.map((group) => (
-                    <TreeLeaf
-                      key={group.name}
-                      label={group.name}
-                      count={group.count}
-                      countTitle={`${group.count} pod${group.count !== 1 ? 's' : ''}`}
-                      selected={scope.kind === 'pod' && scope.group === group.name}
-                      onClick={() => onScopeChange({ kind: 'pod', group: group.name, pods: group.pods })}
-                      styles={styles}
-                      monospace
-                    />
-                  ))}
-              </div>
-            )}
+              {podsExpanded && (
+                <div className={styles.children} role="group">
+                  {podsLoading && (
+                    <div className={styles.loading}>
+                      <LoadingPlaceholder text="Loading pods…" />
+                    </div>
+                  )}
+                  {!podsLoading && podGroups.length === 0 && !podsError && (
+                    <div className={styles.empty}>No series carry a “{podLabel}” label.</div>
+                  )}
+                  {!podsLoading &&
+                    podGroups.map((group) => (
+                      <TreeLeaf
+                        key={group.name}
+                        label={group.name}
+                        count={group.count}
+                        countTitle={`${group.count} pod${group.count !== 1 ? 's' : ''}`}
+                        selected={scope?.kind === 'pod' && scope.group === group.name}
+                        onClick={() => onScopeChange({ kind: 'pod', group: group.name, pods: group.pods })}
+                        styles={styles}
+                        monospace
+                      />
+                    ))}
+                </div>
+              )}
+            </div>
+
+            <div role="treeitem" aria-expanded={nodesExpanded}>
+              <button
+                type="button"
+                className={styles.branch}
+                onClick={() => {
+                  setNodesExpanded((expanded) => !expanded);
+                  setNodesRequested(true);
+                }}
+              >
+                <span className={styles.chevron}>{nodesExpanded ? '▾' : '▸'}</span>
+                <span>By Node</span>
+                <span className={styles.count} title={`${nodes.length} nodes`}>
+                  {nodes.length || '—'}
+                </span>
+              </button>
+
+              {nodesExpanded && (
+                <div className={styles.children} role="group">
+                  {nodesLoading && (
+                    <div className={styles.loading}>
+                      <LoadingPlaceholder text="Loading nodes…" />
+                    </div>
+                  )}
+                  {!nodesLoading && nodes.length === 0 && !nodesError && (
+                    <div className={styles.empty}>No series carry a “{nodeLabel}” label.</div>
+                  )}
+                  {!nodesLoading &&
+                    nodes.map((node) => (
+                      <TreeLeaf
+                        key={node}
+                        label={node}
+                        selected={scope?.kind === 'node' && scope.node === node}
+                        onClick={() => onScopeChange({ kind: 'node', node })}
+                        styles={styles}
+                        monospace
+                      />
+                    ))}
+                </div>
+              )}
+            </div>
+
+            <div role="treeitem" aria-expanded={metricsExpanded}>
+              <button
+                type="button"
+                className={styles.branch}
+                onClick={() => {
+                  setMetricsExpanded((expanded) => !expanded);
+                  setMetricsRequested(true);
+                }}
+              >
+                <span className={styles.chevron}>{metricsExpanded ? '▾' : '▸'}</span>
+                <span>By Name</span>
+                <span className={styles.count}>{metricCount || '—'}</span>
+              </button>
+
+              {metricsExpanded && (
+                <div className={styles.children} role="group">
+                  <TreeLeaf
+                    label="All metrics"
+                    count={metricCount}
+                    selected={scope?.kind === 'all'}
+                    onClick={() => onScopeChange({ kind: 'all' })}
+                    styles={styles}
+                  />
+                  {loading && (
+                    <div className={styles.loading}>
+                      <LoadingPlaceholder text="Loading groups…" />
+                    </div>
+                  )}
+                  {!loading &&
+                    groups.map((group) => (
+                      <TreeLeaf
+                        key={group.name}
+                        label={group.name}
+                        count={group.count}
+                        selected={scope?.kind === 'group' && scope.group === group.name}
+                        onClick={() => onScopeChange({ kind: 'group', group: group.name })}
+                        styles={styles}
+                        monospace
+                      />
+                    ))}
+                </div>
+              )}
+            </div>
           </div>
 
-          <div role="treeitem" aria-expanded={nodesExpanded}>
-            <button
-              type="button"
-              className={styles.branch}
-              onClick={() => {
-                setNodesExpanded((expanded) => !expanded);
-                setNodesRequested(true);
-              }}
-            >
-              <span className={styles.chevron}>{nodesExpanded ? '▾' : '▸'}</span>
-              <span>By Node</span>
-              <span className={styles.count} title={`${nodes.length} nodes`}>
-                {nodes.length || '—'}
-              </span>
-            </button>
-
-            {nodesExpanded && (
-              <div className={styles.children} role="group">
-                {nodesLoading && (
-                  <div className={styles.loading}>
-                    <LoadingPlaceholder text="Loading nodes…" />
-                  </div>
-                )}
-                {!nodesLoading && nodes.length === 0 && !nodesError && (
-                  <div className={styles.empty}>No series carry a “{nodeLabel}” label.</div>
-                )}
-                {!nodesLoading &&
-                  nodes.map((node) => (
-                    <TreeLeaf
-                      key={node}
-                      label={node}
-                      selected={scope.kind === 'node' && scope.node === node}
-                      onClick={() => onScopeChange({ kind: 'node', node })}
-                      styles={styles}
-                      monospace
-                    />
-                  ))}
-              </div>
-            )}
-          </div>
-
-          <div role="treeitem" aria-expanded={metricsExpanded}>
-            <button
-              type="button"
-              className={styles.branch}
-              onClick={() => {
-                setMetricsExpanded((expanded) => !expanded);
-                setMetricsRequested(true);
-              }}
-            >
-              <span className={styles.chevron}>{metricsExpanded ? '▾' : '▸'}</span>
-              <span>By Name</span>
-              <span className={styles.count}>{metricCount || '—'}</span>
-            </button>
-
-            {metricsExpanded && (
-              <div className={styles.children} role="group">
-                <TreeLeaf
-                  label="All metrics"
-                  count={metricCount}
-                  selected={scope.kind === 'all'}
-                  onClick={() => onScopeChange({ kind: 'all' })}
-                  styles={styles}
-                />
-                {loading && (
-                  <div className={styles.loading}>
-                    <LoadingPlaceholder text="Loading groups…" />
-                  </div>
-                )}
-                {!loading &&
-                  groups.map((group) => (
-                    <TreeLeaf
-                      key={group.name}
-                      label={group.name}
-                      count={group.count}
-                      selected={scope.kind === 'group' && scope.group === group.name}
-                      onClick={() => onScopeChange({ kind: 'group', group: group.name })}
-                      styles={styles}
-                      monospace
-                    />
-                  ))}
-              </div>
-            )}
-          </div>
-
-          <div role="treeitem" aria-expanded={workspaceExpanded}>
-            <button
-              type="button"
-              className={styles.branch}
-              onClick={() => setWorkspaceExpanded((expanded) => !expanded)}
-            >
-              <span className={styles.chevron}>{workspaceExpanded ? '▾' : '▸'}</span>
-              <span>Workspace</span>
-            </button>
-            {workspaceExpanded && (
-              <div className={styles.children} role="group">
-                <TreeLeaf
-                  label="Favorites"
-                  count={favoriteCount}
-                  selected={scope.kind === 'favorites'}
-                  onClick={() => onScopeChange({ kind: 'favorites' })}
-                  styles={styles}
-                />
-              </div>
-            )}
-          </div>
+          <FavoritesMenu />
         </div>
       )}
 
