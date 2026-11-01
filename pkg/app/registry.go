@@ -84,7 +84,7 @@ func targetKey(orgID int64, uid string) string {
 }
 
 // get returns the target for a datasource, after checking that the datasource exists, is a
-// VictoriaMetrics-type datasource, and passes the app's allowlist.
+// supported datasource, and passes the app's allowlist.
 func (r *registry) get(ctx context.Context, orgID int64, uid string) (*target, error) {
 	if !r.settings.allows(uid) {
 		return nil, errDatasourceDenied
@@ -107,8 +107,9 @@ func (r *registry) get(ctx context.Context, orgID int64, uid string) (*target, e
 		}
 		return nil, err
 	}
-	if info.Type != vmDatasourceType {
-		return nil, fmt.Errorf("%w: type %q is not %q", errDatasourceDenied, info.Type, vmDatasourceType)
+	if !vmclient.IsSupportedDatasourceType(info.Type) {
+		r.drop(key)
+		return nil, fmt.Errorf("%w: unsupported type %q; use Prometheus or VictoriaMetrics", errDatasourceDenied, info.Type)
 	}
 
 	fp := r.fingerprint(orgID, info)
@@ -192,6 +193,7 @@ func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target,
 	obs := observability.New(info.UID)
 	client, err := vmclient.New(vmclient.Config{
 		UID:               info.UID,
+		DatasourceType:    info.Type,
 		OrgID:             orgID,
 		ConfigFingerprint: fp,
 		Credentials:       r.creds,

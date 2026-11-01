@@ -1,6 +1,6 @@
 .PHONY: proto build build-go build-frontend test test-go test-frontend test-e2e test-userstorage vet lint clean dev provision docker build-linux run stop logs
 
-# Plugin ID (the Explorer is a single app plugin; it uses the existing VictoriaMetrics datasource)
+# Plugin ID (the Explorer is a single app plugin; it uses existing Prometheus and VictoriaMetrics datasources)
 APP_PLUGIN_ID := ahfuzhang-victoriametricsexplorer-app
 
 # Go binary name (must start with gpx_ for Grafana)
@@ -117,7 +117,7 @@ build-linux: build-frontend ## Build frontend + Linux backend binary for the Doc
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(DOCKER_ARCH) go build $(GOFLAGS) -o dist/$(GO_BINARY)_linux_$(DOCKER_ARCH) .
 	@echo "Built dist/$(GO_BINARY)_linux_$(DOCKER_ARCH)"
 
-run: build-linux ## Build the plugin and start Grafana (+ VictoriaMetrics) in Docker with it installed
+run: build-linux ## Build the plugin and start Grafana (+ Prometheus and VictoriaMetrics) in Docker with it installed
 	$(COMPOSE) up -d --force-recreate grafana
 	@printf "Waiting for Grafana"; \
 	for i in $$(seq 1 60); do \
@@ -128,7 +128,7 @@ run: build-linux ## Build the plugin and start Grafana (+ VictoriaMetrics) in Do
 	@echo "Grafana is ready: $(GRAFANA_URL)  (login: admin / admin)"
 	@echo "Plugin page:      $(GRAFANA_URL)/a/$(APP_PLUGIN_ID)"
 
-stop: ## Stop Grafana and VictoriaMetrics (data volumes are kept)
+stop: ## Stop Grafana, Prometheus and VictoriaMetrics (data volumes are kept)
 	$(COMPOSE) down
 
 logs: ## Tail Grafana logs

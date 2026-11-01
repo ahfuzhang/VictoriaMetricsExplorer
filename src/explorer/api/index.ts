@@ -56,7 +56,6 @@ export interface Capabilities {
     cacheHit: boolean;
     rangePrecision: string;
   };
-  upstreamVersion: string;
   upstreamProduct: string;
   supportsNativeHistogram: boolean;
   supportsMetricsql: boolean;
@@ -323,13 +322,10 @@ export interface DiagnosticsResponse {
 /** The Explorer app's ID; its backend is reached through Grafana's plugin resource proxy. */
 export const PLUGIN_ID = 'ahfuzhang-victoriametricsexplorer-app';
 
-/** The only datasource type the Explorer works with: the official VictoriaMetrics datasource. */
-export const VM_DATASOURCE_TYPE = 'victoriametrics-metrics-datasource';
-
 const RESOURCES = `/api/plugins/${PLUGIN_ID}/resources/explorer/v1`;
 
 /**
- * Build the app backend URL for one VictoriaMetrics datasource and Explorer endpoint, e.g.
+ * Build the app backend URL for one supported datasource and Explorer endpoint, e.g.
  * dsURL('vm-uid', '/capabilities'). The backend reaches the datasource through Grafana with the
  * plugin's service account; the browser only ever names the datasource by UID.
  */
@@ -338,7 +334,7 @@ function dsURL(uid: string, endpoint: string): string {
 }
 
 /**
- * Get the VictoriaMetrics datasources the Explorer can use. The backend decides which ones exist
+ * Get the Prometheus and VictoriaMetrics datasources the Explorer can use. The backend decides which ones exist
  * (type and the admin's allowlist); the list is then narrowed to the datasources this user can see
  * in Grafana, so people are not offered datasources Grafana hides from them.
  */
@@ -367,7 +363,6 @@ export async function fetchCapabilities(uid: string): Promise<Capabilities> {
       cacheHit: pb.meta?.cacheHit ?? false,
       rangePrecision: RangePrecision[pb.meta?.rangePrecision ?? RangePrecision.UNSPECIFIED],
     },
-    upstreamVersion: pb.upstreamVersion,
     upstreamProduct: pb.upstreamProduct,
     supportsNativeHistogram: pb.supportsNativeHistogram,
     supportsMetricsql: pb.supportsMetricsql,
@@ -820,7 +815,7 @@ export interface RangeQueryResult {
 }
 
 /**
- * Run a range query through the app backend (VictoriaMetrics /api/v1/query_range via the Grafana
+ * Run a range query through the app backend (/api/v1/query_range via the Grafana
  * datasource proxy). An empty step lets the backend choose: 1m, raised to keep about
  * CHART_MAX_DATA_POINTS points per series.
  */

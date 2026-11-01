@@ -190,7 +190,7 @@ func TestBuildMetricIndexEntriesCollapsesHistogramMembers(t *testing.T) {
 
 // metricTypesHarness serves a fake datasource proxy: __name__ label values from names, and
 // query_range matrices from series, keyed by metric name.
-func metricTypesHarness(t *testing.T, names []string, series map[string]string) (*Handlers, *atomic.Int64) {
+func metricTypesHarness(t *testing.T, names []string, series map[string]string, datasourceType ...string) (*Handlers, *atomic.Int64) {
 	t.Helper()
 	var rangeQueries atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +212,12 @@ func metricTypesHarness(t *testing.T, names []string, series map[string]string) 
 		case strings.HasSuffix(r.URL.Path, "/api/v1/query"):
 			query := r.URL.Query().Get("query")
 			// The zero-counter check: report the maximum of every listed counter that has series.
-			if strings.HasPrefix(query, "max by (__name__) (max_over_time(") {
+			if strings.HasPrefix(query, "max by (__name__) (max_over_time(") || strings.HasPrefix(query, "label_replace(max(max_over_time(") {
+				if len(datasourceType) > 0 && datasourceType[0] == vmclient.PrometheusDatasourceType && strings.Contains(query, "keep_metric_names") {
+					t.Error("Prometheus received a MetricsQL query")
+					http.Error(w, "unsupported query", http.StatusBadRequest)
+					return
+				}
 				var result []string
 				for name, values := range series {
 					if strings.Contains(query, regexp.QuoteMeta(name)) {
@@ -246,6 +251,9 @@ func metricTypesHarness(t *testing.T, names []string, series map[string]string) 
 		Credentials: func(context.Context) (string, string, error) {
 			return upstream.URL, "token", nil
 		},
+	}
+	if len(datasourceType) > 0 {
+		cfg.DatasourceType = datasourceType[0]
 	}
 	lim := limits.Default()
 	obs := observability.New("vm")
@@ -411,45 +419,68 @@ func TestAllSamplesZero(t *testing.T) {
 }
 
 func TestHandleMetricTypesMarksZeroCounters(t *testing.T) {
-	h, rangeQueries := metricTypesHarness(t, nil, map[string]string{
-		"idle_total":     `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
-		"requests_total": `{"metric":{},"values":[[1,"1"],[2,"5"]]}`,
-	})
-	code, resp := postMetricTypes(t, h, "idle_total", "requests_total", "missing_total")
-	if code != http.StatusOK {
-		t.Fatalf("status %d", code)
-	}
-	for _, name := range []string{"idle_total", "requests_total", "missing_total"} {
-		if resp.Types[name] != metricTypeCounter {
-			t.Errorf("%s: got %q, want counter", name, resp.Types[name])
-		}
-	}
-	if !resp.ZeroValues["idle_total"] || resp.ZeroValues["requests_total"] || resp.ZeroValues["missing_total"] {
-		t.Fatalf("only idle_total is always 0, got %v", resp.ZeroValues)
-	}
-	// Named counters are checked with one instant query, never a range query.
-	if n := rangeQueries.Load(); n != 0 {
-		t.Fatalf("expected no range queries, got %d", n)
+	for _, datasourceType := range []string{vmclient.VictoriaMetricsDatasourceType, vmclient.PrometheusDatasourceType} {
+		t.Run(datasourceType, func(t *testing.T) {
+			h, rangeQueries := metricTypesHarness(t, nil, map[string]string{
+				"idle_total":     `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
+				"requests_total": `{"metric":{},"values":[[1,"1"],[2,"5"]]}`,
+			}, datasourceType)
+			code, resp := postMetricTypes(t, h, "idle_total", "requests_total", "missing_total")
+			if code != http.StatusOK {
+				t.Fatalf("status %d", code)
+			}
+			for _, name := range []string{"idle_total", "requests_total", "missing_total"} {
+				if resp.Types[name] != metricTypeCounter {
+					t.Errorf("%s: got %q, want counter", name, resp.Types[name])
+				}
+			}
+			if !resp.ZeroValues["idle_total"] || resp.ZeroValues["requests_total"] || resp.ZeroValues["missing_total"] {
+				t.Fatalf("only idle_total is always 0, got %v", resp.ZeroValues)
+			}
+			// Named counters are checked with one instant query, never a range query.
+			if n := rangeQueries.Load(); n != 0 {
+				t.Fatalf("expected no range queries, got %d", n)
+			}
+		})
 	}
 }
 
 func TestHandleMetricTypesMarksZeroHistograms(t *testing.T) {
-	names := []string{
-		"idle_seconds_bucket", "idle_seconds_count", "idle_seconds_sum",
-		"busy_seconds_bucket", "busy_seconds_count", "busy_seconds_sum",
-		"buckets_only_bucket",
+	for _, datasourceType := range []string{vmclient.VictoriaMetricsDatasourceType, vmclient.PrometheusDatasourceType} {
+		t.Run(datasourceType, func(t *testing.T) {
+			names := []string{
+				"idle_seconds_bucket", "idle_seconds_count", "idle_seconds_sum",
+				"busy_seconds_bucket", "busy_seconds_count", "busy_seconds_sum",
+				"buckets_only_bucket",
+			}
+			h, _ := metricTypesHarness(t, names, map[string]string{
+				"idle_seconds_count":  `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
+				"busy_seconds_count":  `{"metric":{},"values":[[1,"3"],[2,"9"]]}`,
+				"buckets_only_bucket": `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
+			}, datasourceType)
+			code, resp := postMetricTypes(t, h, "idle_seconds_bucket", "busy_seconds_bucket", "buckets_only_bucket")
+			if code != http.StatusOK {
+				t.Fatalf("status %d", code)
+			}
+			want := map[string]bool{"idle_seconds_bucket": true, "buckets_only_bucket": true}
+			if !reflect.DeepEqual(resp.ZeroValues, want) {
+				t.Fatalf("zeroValues = %v, want %v", resp.ZeroValues, want)
+			}
+		})
 	}
-	h, _ := metricTypesHarness(t, names, map[string]string{
-		"idle_seconds_count":  `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
-		"busy_seconds_count":  `{"metric":{},"values":[[1,"3"],[2,"9"]]}`,
-		"buckets_only_bucket": `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
-	})
-	code, resp := postMetricTypes(t, h, "idle_seconds_bucket", "busy_seconds_bucket", "buckets_only_bucket")
-	if code != http.StatusOK {
-		t.Fatalf("status %d", code)
+}
+
+func TestPrometheusZeroCounterBatches(t *testing.T) {
+	names := make([]string, zeroCounterBatch+1)
+	series := make(map[string]string, len(names))
+	for i := range names {
+		name := "counter_" + strconv.Itoa(1000+i) + "_total"
+		names[i] = name
+		series[name] = `{"metric":{},"values":[[1,"0"],[2,"0"]]}`
 	}
-	want := map[string]bool{"idle_seconds_bucket": true, "buckets_only_bucket": true}
-	if !reflect.DeepEqual(resp.ZeroValues, want) {
-		t.Fatalf("zeroValues = %v, want %v", resp.ZeroValues, want)
+	h, _ := metricTypesHarness(t, nil, series, vmclient.PrometheusDatasourceType)
+	code, resp := postMetricTypes(t, h, names...)
+	if code != http.StatusOK || len(resp.ZeroValues) != len(names) {
+		t.Fatalf("expected all %d zero counters across batches, got status %d: %v", len(names), code, resp.ZeroValues)
 	}
 }

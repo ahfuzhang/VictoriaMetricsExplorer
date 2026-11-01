@@ -7,7 +7,7 @@
   "executable": "gpx_victoriametricsexplorer",
   "info": {
     "keywords": ["app", "victoriametrics", "metrics", "explorer", "prometheus"],
-    "description": "Explore metrics from your existing VictoriaMetrics datasources without writing PromQL. Browse by metric, pod, or node.",
+    "description": "Explore metrics from your existing Prometheus and VictoriaMetrics datasources without writing PromQL. Browse by metric, pod, or node.",
     "author": {
       "name": "ahfuzhang",
       "url": "https://github.com/ahfuzhang"
@@ -44,12 +44,6 @@
   },
   "dependencies": {
     "grafanaDependency": ">=11.6.0",
-    "plugins": [
-      {
-        "id": "victoriametrics-metrics-datasource",
-        "type": "datasource",
-        "name": "VictoriaMetrics"
-      }
-    ]
+    "plugins": []
   }
 }

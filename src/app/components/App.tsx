@@ -51,7 +51,7 @@ export const App: React.FC<Props> = ({ meta }) => {
   const [step, setStep] = useState('auto');
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Load the VictoriaMetrics datasources the Explorer can use
+  // Load the Prometheus and VictoriaMetrics datasources the Explorer can use
   useEffect(() => {
     getDatasources()
       .then((ds: any) => {
@@ -145,9 +145,7 @@ export const App: React.FC<Props> = ({ meta }) => {
                 />
               </label>
               {capabilities && (
-                <span className={styles.versionBadge}>
-                  {capabilities.upstreamProduct} {capabilities.upstreamVersion ?? ''}
-                </span>
+                <span className={styles.productBadge}>{capabilities.upstreamProduct}</span>
               )}
             </div>
             <div className={styles.toolbarRight}>
@@ -191,7 +189,7 @@ export const App: React.FC<Props> = ({ meta }) => {
             <>
               {!error && (
                 <Alert title="No datasource selected" severity="info">
-                  Add a VictoriaMetrics datasource (type “VictoriaMetrics”) to start exploring metrics.
+                  Add a Prometheus or VictoriaMetrics datasource to start exploring metrics.
                   <Button
                     variant="secondary"
                     size="sm"
@@ -213,7 +211,7 @@ export const App: React.FC<Props> = ({ meta }) => {
 
 function errorTitle(error: LoadError, datasources: SelectableValue[]): string {
   if (error.step === 'datasources') {
-    return 'Cannot list the VictoriaMetrics datasources';
+    return 'Cannot list the Prometheus and VictoriaMetrics datasources';
   }
   const name = datasources.find((d) => d.value === error.uid)?.label;
   return name ? `Cannot read from datasource "${name}" (uid ${error.uid})` : `Cannot read from datasource ${error.uid}`;
@@ -265,7 +263,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
     fontWeight: theme.typography.fontWeightMedium,
     whiteSpace: 'nowrap',
   }),
-  versionBadge: css({
+  productBadge: css({
     fontSize: theme.typography.size.sm,
     color: theme.colors.text.secondary,
     padding: `${theme.spacing(0.25)} ${theme.spacing(1)}`,

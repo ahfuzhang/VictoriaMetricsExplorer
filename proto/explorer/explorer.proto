@@ -97,7 +97,9 @@ message CapabilitiesResponse {
   SchemaVersion schema = 1;
   ResponseMeta meta = 2;
 
-  string upstream_version = 3;
+  // Was upstream_version; VictoriaMetrics' buildinfo reports a fixed Prometheus version, so it said nothing.
+  reserved 3;
+  reserved "upstream_version";
   string upstream_product = 4;   // "VictoriaMetrics", "VictoriaMetrics Cluster", etc.
 
   bool supports_native_histogram = 5;

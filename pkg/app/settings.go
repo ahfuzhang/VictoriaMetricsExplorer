@@ -18,7 +18,7 @@ import (
 // credentials: connection details live in the Grafana datasources the app explores.
 type Settings struct {
 	// DatasourceUIDs optionally restricts which datasources the Explorer may query. When
-	// empty, every VictoriaMetrics-type datasource in the organization is available.
+	// empty, every Prometheus or VictoriaMetrics datasource in the organization is available.
 	//
 	// The plugin queries datasources with its own service account, not with the end user's
 	// identity, so Grafana's per-user datasource permissions are not enforced by the backend.

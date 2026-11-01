@@ -1,7 +1,7 @@
 {
   "name": "ahfuzhang-victoriametricsexplorer-app",
   "version": "0.1.0",
-  "description": "VictoriaMetrics Explorer — explore metrics without writing PromQL",
+  "description": "VictoriaMetrics Explorer — explore Prometheus and VictoriaMetrics without writing PromQL",
   "scripts": {
     "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
     "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",

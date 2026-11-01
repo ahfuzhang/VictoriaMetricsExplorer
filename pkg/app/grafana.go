@@ -16,9 +16,8 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
 
-// vmDatasourceType is the plugin ID of the official VictoriaMetrics datasource. The Explorer
-// only works with datasources of this type; it does not ship a datasource of its own.
-const vmDatasourceType = "victoriametrics-metrics-datasource"
+// The Explorer uses existing Grafana datasources; it does not ship a datasource of its own.
+const vmDatasourceType = vmclient.VictoriaMetricsDatasourceType
 
 // serviceAccountOrgID is the only organization Grafana's managed plugin service accounts
 // can act in. Without a token of its own, the app refuses requests from any other org rather

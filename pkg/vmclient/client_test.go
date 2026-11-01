@@ -63,6 +63,31 @@ func TestBuildURLEscapesUID(t *testing.T) {
 	}
 }
 
+func TestClientDatasourceTypes(t *testing.T) {
+	for _, tc := range []struct {
+		datasourceType string
+		product        string
+		metricsQL      bool
+	}{
+		{"", "VictoriaMetrics", true}, // Existing callers keep VictoriaMetrics behavior.
+		{VictoriaMetricsDatasourceType, "VictoriaMetrics", true},
+		{PrometheusDatasourceType, "Prometheus", false},
+	} {
+		client, err := New(Config{UID: "test", DatasourceType: tc.datasourceType}, limits.Default(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := client.Config()
+		client.Close()
+		if cfg.DatasourceType == "" || cfg.UpstreamProduct() != tc.product || cfg.SupportsMetricsQL() != tc.metricsQL {
+			t.Errorf("unexpected capabilities for type %q: %+v", tc.datasourceType, cfg)
+		}
+	}
+	if _, err := New(Config{UID: "test", DatasourceType: "loki"}, limits.Default(), nil); err == nil {
+		t.Fatal("an unsupported datasource type must be rejected")
+	}
+}
+
 func newClient(t *testing.T, baseURL, token string) *Client {
 	t.Helper()
 	obs := observability.New("test")

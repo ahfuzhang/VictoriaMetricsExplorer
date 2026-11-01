@@ -259,16 +259,11 @@ const zeroCounterBatch = 50
 // whose samples are all 0. Counters never go below 0, so that is a maximum of 0; one instant query
 // covers a whole batch of names.
 func (h *Handlers) zeroCounters(ctx context.Context, names []string, end time.Time) (map[string]bool, error) {
-	// keep_metric_names (VictoriaMetrics) keeps __name__ on the max_over_time result.
-	const head, tail = "max by (__name__) (max_over_time({__name__", "]) keep_metric_names)"
 	zero := make(map[string]bool)
 	for offset := 0; offset < len(names); offset += zeroCounterBatch {
 		batch := names[offset:min(offset+zeroCounterBatch, len(names))]
-		b := make([]byte, 0, len(head)+valuesMatchLen(batch)+len("}[")+maxStepLen+len(tail))
-		b = appendValuesMatch(append(b, head...), batch)
-		b = appendStep(append(b, "}["...), int64(metricTypeWindow.Seconds()))
-		b = append(b, tail...)
-		data, err := h.router.client.Query(ctx, bytesutil.ToUnsafeString(b), end)
+		query := zeroCounterQuery(batch, h.router.config.SupportsMetricsQL())
+		data, err := h.router.client.Query(ctx, query, end)
 		if err != nil {
 			return nil, err
 		}
@@ -279,6 +274,34 @@ func (h *Handlers) zeroCounters(ctx context.Context, names []string, end time.Ti
 		}
 	}
 	return zero, nil
+}
+
+// zeroCounterQuery preserves the metric identity while checking every raw sample in the window.
+// Prometheus drops __name__ in max_over_time, so roll up each metric separately and restore its
+// name after aggregation. Joining those results avoids duplicate label sets across metric names
+// without a resampled subquery that could miss a brief non-zero sample.
+func zeroCounterQuery(names []string, metricsQL bool) string {
+	if metricsQL {
+		const head, tail = "max by (__name__) (max_over_time({__name__", "]) keep_metric_names)"
+		b := make([]byte, 0, len(head)+valuesMatchLen(names)+len("}[")+maxStepLen+len(tail))
+		b = appendValuesMatch(append(b, head...), names)
+		b = appendStep(append(b, "}["...), int64(metricTypeWindow.Seconds()))
+		return bytesutil.ToUnsafeString(append(b, tail...))
+	}
+
+	queries := make([]string, 0, len(names))
+	for _, name := range names {
+		// label_replace interprets $ in its replacement, even though it is literal in a selector.
+		replacement := strings.ReplaceAll(name, "$", "$$")
+		const head, mid, tail = "label_replace(max(max_over_time({__name__=", "])), \"__name__\", ", ", \"\", \"\")"
+		b := make([]byte, 0, len(head)+quotedLen(name)+len("}[")+maxStepLen+len(mid)+quotedLen(replacement)+len(tail))
+		b = appendQuoted(append(b, head...), name)
+		b = appendStep(append(b, "}["...), int64(metricTypeWindow.Seconds()))
+		b = appendQuoted(append(b, mid...), replacement)
+		queries = append(queries, bytesutil.ToUnsafeString(append(b, tail...)))
+	}
+	// Default vector matching ignores metric names, which would collapse these aggregate series.
+	return strings.Join(queries, " or on (__name__) ")
 }
 
 func (h *Handlers) cachedMetricType(name string) (metricTypeResult, bool) {

@@ -394,7 +394,7 @@ test('without a usable datasource the favorites still open and run', async ({ br
   const { context, page } = await signedIn(browser, user);
   await page.route('**/resources/explorer/v1/datasources', (route) => route.fulfill({ status: 500, body: 'down' }));
   await page.goto('/a/ahfuzhang-victoriametricsexplorer-app');
-  await expect(page.getByText('Cannot list the VictoriaMetrics datasources')).toBeVisible();
+  await expect(page.getByText('Cannot list the Prometheus and VictoriaMetrics datasources')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Favorites' })).toBeVisible();
   await menuTree(page).getByText('E2E requests', { exact: true }).click();
   const charts = page.getByRole('region', { name: /^Statement \d+ chart$/ });

@@ -13,12 +13,12 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
 
-// newTestClient reaches a VictoriaMetrics datasource the way the app does: through Grafana's
+// newTestClient reaches a Prometheus or VictoriaMetrics datasource the way the app does: through Grafana's
 // datasource proxy, using a Grafana API token (a service account token with datasources:query).
 //
 //	VMX_GRAFANA_URL    e.g. http://localhost:3000
 //	VMX_GRAFANA_TOKEN  service account token
-//	VMX_DS_UID         UID of a victoriametrics-metrics-datasource
+//	VMX_DS_UID         UID of a prometheus or victoriametrics-metrics-datasource
 func newTestClient(t *testing.T) *vmclient.Client {
 	baseURL, token, uid := os.Getenv("VMX_GRAFANA_URL"), os.Getenv("VMX_GRAFANA_TOKEN"), os.Getenv("VMX_DS_UID")
 	if baseURL == "" || token == "" || uid == "" {
@@ -42,14 +42,14 @@ func newTestClient(t *testing.T) *vmclient.Client {
 	return client
 }
 
-// TestIntegration_LabelValues tests against a live VictoriaMetrics instance.
+// TestIntegration_LabelValues tests against a live Prometheus or VictoriaMetrics instance.
 // Run with: go test -tags=integration -v ./tests/integration/...
 func TestIntegration_LabelValues(t *testing.T) {
 	client := newTestClient(t)
 	ctx := context.Background()
 
 	// Test fetching metric names (label values for __name__)
-	names, isPartial, err := client.LabelValues(ctx, "__name__", time.Time{}, time.Time{}, 100)
+	names, isPartial, err := client.LabelValues(ctx, "__name__", nil, time.Time{}, time.Time{}, 100)
 	if err != nil {
 		t.Fatalf("LabelValues failed: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestIntegration_QueryRange(t *testing.T) {
 	ctx := context.Background()
 
 	// First get a metric name
-	names, _, err := client.LabelValues(ctx, "__name__", time.Time{}, time.Time{}, 1)
+	names, _, err := client.LabelValues(ctx, "__name__", nil, time.Time{}, time.Time{}, 1)
 	if err != nil || len(names) == 0 {
 		t.Skip("no metrics available for range query test")
 	}
@@ -109,7 +109,7 @@ func TestIntegration_Metadata(t *testing.T) {
 	ctx := context.Background()
 
 	// First get a metric name
-	names, _, err := client.LabelValues(ctx, "__name__", time.Time{}, time.Time{}, 1)
+	names, _, err := client.LabelValues(ctx, "__name__", nil, time.Time{}, time.Time{}, 1)
 	if err != nil || len(names) == 0 {
 		t.Skip("no metrics available for metadata test")
 	}

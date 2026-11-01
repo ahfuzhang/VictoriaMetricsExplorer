@@ -45,6 +45,7 @@ func newFakeGrafana(t *testing.T) *fakeGrafana {
 	g := &fakeGrafana{datasources: map[string]*datasourceInfo{
 		"vm1":  {UID: "vm1", OrgID: 1, Name: "VM One", Type: vmDatasourceType, URL: "http://secret-vm.internal:8428", Version: 1},
 		"vm2":  {UID: "vm2", OrgID: 1, Name: "VM Two", Type: vmDatasourceType, URL: "http://other.internal:8481/select/0/prometheus", Version: 1},
+		"loki": {UID: "loki", OrgID: 1, Name: "Logs", Type: "loki", URL: "http://logs.internal:3100", Version: 1},
 		"prom": {UID: "prom", OrgID: 1, Name: "Prom", Type: "prometheus", URL: "http://prom.internal:9090", Version: 1},
 	}}
 	g.Server = httptest.NewServer(http.HandlerFunc(g.serve))
@@ -65,7 +66,7 @@ func (g *fakeGrafana) serve(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/datasources":
 		g.apiCalls.Add(1)
 		list := make([]*datasourceInfo, 0, len(g.datasources))
-		for _, uid := range []string{"prom", "vm2", "vm1"} { // deliberately unsorted
+		for _, uid := range []string{"vm2", "loki", "prom", "vm1"} { // deliberately unsorted
 			list = append(list, g.datasources[uid])
 		}
 		_ = json.MarshalWrite(w, list)
@@ -88,8 +89,6 @@ func (g *fakeGrafana) serve(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"success","data":["go_goroutines","process_cpu_seconds_total","up","vm_app_version"]}`))
 		case strings.HasSuffix(r.URL.Path, "/api/v1/labels"):
 			_, _ = w.Write([]byte(`{"status":"success","data":["__name__","job","instance","pod","namespace"]}`))
-		case strings.HasSuffix(r.URL.Path, "/api/v1/status/buildinfo"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"version":"v1.130.0"}}`))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":[]}`))
 		}
@@ -202,14 +201,14 @@ func TestListDatasourcesFiltersByTypeAndNeverLeaksURLs(t *testing.T) {
 		t.Fatalf("status %d: %s", res.status, res)
 	}
 	items := res.datasources(t)
-	if len(items) != 2 {
-		t.Fatalf("expected the 2 VictoriaMetrics datasources, got %v", items)
+	if len(items) != 3 {
+		t.Fatalf("expected Prometheus and both VictoriaMetrics datasources, got %v", items)
 	}
-	if first := items[0].Uid; first != "vm1" {
-		t.Fatalf("expected datasources sorted by name (vm1 first), got %v", first)
+	if first := items[0].Uid; first != "prom" {
+		t.Fatalf("expected datasources sorted by name (Prom first), got %v", first)
 	}
 	body := prototext.Format(&explorerpb.DatasourcesResponse{Datasources: items})
-	for _, leaked := range []string{"internal", "8428", "prom"} {
+	for _, leaked := range []string{"internal", "8428", "9090", "loki"} {
 		if strings.Contains(body, leaked) {
 			t.Fatalf("response leaks %q: %s", leaked, body)
 		}
@@ -235,23 +234,32 @@ func TestAllowlistRestrictsDatasources(t *testing.T) {
 }
 
 func TestScopedCallsGoThroughGrafanaProxy(t *testing.T) {
-	g := newFakeGrafana(t)
-	a := newTestApp(t, g, nil)
-
-	res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/vm1/capabilities", nil)
-	if res.status != http.StatusOK {
-		t.Fatalf("capabilities: %d %s", res.status, res)
-	}
-	var caps explorerpb.CapabilitiesResponse
-	res.decode(t, &caps)
-	if caps.UpstreamVersion != "v1.130.0" {
-		t.Fatalf("expected the version fetched through the proxy, got %v", caps.UpstreamVersion)
-	}
-	if g.proxyCalls.Load() == 0 {
-		t.Fatal("expected the request to reach the Grafana datasource proxy")
-	}
-	if g.badTokens.Load() != 0 {
-		t.Fatalf("%d request(s) reached Grafana without the service-account token", g.badTokens.Load())
+	for _, tc := range []struct {
+		uid, product string
+		metricsQL    bool
+	}{
+		{"vm1", "VictoriaMetrics", true},
+		{"prom", "Prometheus", false},
+	} {
+		t.Run(tc.product, func(t *testing.T) {
+			g := newFakeGrafana(t)
+			a := newTestApp(t, g, nil)
+			res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/"+tc.uid+"/capabilities", nil)
+			if res.status != http.StatusOK {
+				t.Fatalf("capabilities: %d %s", res.status, res)
+			}
+			var caps explorerpb.CapabilitiesResponse
+			res.decode(t, &caps)
+			if caps.UpstreamProduct != tc.product || caps.SupportsMetricsql != tc.metricsQL {
+				t.Fatalf("unexpected capabilities: %v", &caps)
+			}
+			if g.proxyCalls.Load() == 0 {
+				t.Fatal("expected the request to reach the Grafana datasource proxy")
+			}
+			if g.badTokens.Load() != 0 {
+				t.Fatalf("%d request(s) reached Grafana without the service-account token", g.badTokens.Load())
+			}
+		})
 	}
 }
 
@@ -281,7 +289,7 @@ func TestMetricIndexIsCachedPerDatasource(t *testing.T) {
 	}
 
 	// Same request against a different datasource must not be served from vm1's cache.
-	call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/vm2/metric-index", req)
+	call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/prom/metric-index", req)
 	if g.proxyCalls.Load() == afterFirst {
 		t.Fatalf("a different datasource must not share a cache")
 	}
@@ -308,12 +316,58 @@ func TestDatasourceReconfigurationInvalidatesCache(t *testing.T) {
 	}
 }
 
-func TestRejectsNonVictoriaMetricsAndUnknownDatasources(t *testing.T) {
+func TestDatasourceTypeChangeRefreshesCapabilities(t *testing.T) {
+	g := newFakeGrafana(t)
+	a := newTestApp(t, g, nil)
+	a.reg.revalidateEvery = 0
+	path := "explorer/v1/ds/vm1/capabilities"
+	call(t, a, viewer(1), http.MethodGet, path, nil)
+	before := g.proxyCalls.Load()
+
+	g.mu.Lock()
+	g.datasources["vm1"].Type = vmclient.PrometheusDatasourceType
+	g.mu.Unlock()
+	var caps explorerpb.CapabilitiesResponse
+	res := call(t, a, viewer(1), http.MethodGet, path, nil)
+	res.decode(t, &caps)
+	if res.status != http.StatusOK || caps.UpstreamProduct != "Prometheus" || caps.SupportsMetricsql || g.proxyCalls.Load() == before {
+		t.Fatalf("changing type must rebuild the target and capabilities: %d %v", res.status, &caps)
+	}
+
+	g.mu.Lock()
+	g.datasources["vm1"].Type = "loki"
+	g.mu.Unlock()
+	if res := call(t, a, viewer(1), http.MethodGet, path, nil); res.status != http.StatusForbidden {
+		t.Fatalf("unsupported type must invalidate the existing target: %d %s", res.status, res)
+	}
+}
+
+func TestPrometheusAllowlist(t *testing.T) {
+	g := newFakeGrafana(t)
+	a := newTestApp(t, g, &Settings{DatasourceUIDs: []string{"prom"}, DefaultTimeRange: time.Hour, CacheTTL: time.Minute})
+	items := call(t, a, viewer(1), http.MethodGet, "explorer/v1/datasources", nil).datasources(t)
+	if len(items) != 1 || items[0].Uid != "prom" || items[0].Type != vmclient.PrometheusDatasourceType {
+		t.Fatalf("expected only the allowed Prometheus datasource, got %v", items)
+	}
+	if res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/prom/capabilities", nil); res.status != http.StatusOK {
+		t.Fatalf("allowed Prometheus datasource: %d %s", res.status, res)
+	}
+	blocked := newTestApp(t, g, &Settings{DatasourceUIDs: []string{"vm1"}})
+	before := g.apiCalls.Load()
+	if res := call(t, blocked, viewer(1), http.MethodGet, "explorer/v1/ds/prom/capabilities", nil); res.status != http.StatusForbidden {
+		t.Fatalf("Prometheus outside allowlist: %d %s", res.status, res)
+	}
+	if g.apiCalls.Load() != before {
+		t.Fatal("denied requests must not reach Grafana")
+	}
+}
+
+func TestRejectsUnsupportedAndUnknownDatasources(t *testing.T) {
 	g := newFakeGrafana(t)
 	a := newTestApp(t, g, nil)
 
-	if res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/prom/capabilities", nil); res.status != http.StatusForbidden {
-		t.Fatalf("prometheus datasource: expected 403, got %d: %s", res.status, res)
+	if res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/loki/capabilities", nil); res.status != http.StatusForbidden {
+		t.Fatalf("loki datasource: expected 403, got %d: %s", res.status, res)
 	}
 	if res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/nope/capabilities", nil); res.status != http.StatusNotFound {
 		t.Fatalf("unknown datasource: expected 404, got %d: %s", res.status, res)
@@ -512,7 +566,7 @@ func TestCheckHealth(t *testing.T) {
 	g := newFakeGrafana(t)
 	a := newTestApp(t, g, nil)
 	got, err := a.CheckHealth(context.Background(), &backend.CheckHealthRequest{})
-	if err != nil || got.Status != backend.HealthStatusOk || !strings.Contains(got.Message, "2 VictoriaMetrics") {
+	if err != nil || got.Status != backend.HealthStatusOk || !strings.Contains(got.Message, "3 Prometheus/VictoriaMetrics") {
 		t.Fatalf("unexpected healthy result: %+v err=%v", got, err)
 	}
 

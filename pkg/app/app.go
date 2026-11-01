@@ -22,7 +22,7 @@ import (
 
 // Resource API layout (all under /api/plugins/<app id>/resources/):
 //
-//	GET  /explorer/v1/datasources                 VictoriaMetrics datasources the Explorer may use
+//	GET  /explorer/v1/datasources                 Prometheus and VictoriaMetrics datasources the Explorer may use
 //	*    /explorer/v1/ds/{uid}/{endpoint...}      the per-datasource Explorer API (capabilities, metric-index, ...)
 const (
 	routeDatasources = "GET /explorer/v1/datasources"
@@ -35,8 +35,8 @@ func Manage(pluginID string) error {
 }
 
 // App is the backend instance of the VictoriaMetrics Explorer app plugin. It is the only
-// plugin this package ships: it holds no VictoriaMetrics URL or credentials, and reaches the
-// user's existing VictoriaMetrics datasources through Grafana using its service account.
+// plugin this package ships: it holds no upstream URL or credentials, and reaches the
+// user's existing Prometheus and VictoriaMetrics datasources through Grafana using its service account.
 type App struct {
 	backend.CallResourceHandler
 
@@ -110,7 +110,7 @@ func (a *App) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequest) (*
 			Message: "cannot list datasources with the plugin service account: " + friendlyError(err),
 		}, nil
 	}
-	const head, tail = "VictoriaMetrics Explorer is running; ", " VictoriaMetrics datasource(s) available"
+	const head, tail = "VictoriaMetrics Explorer is running; ", " Prometheus/VictoriaMetrics datasource(s) available"
 	msg := make([]byte, 0, len(head)+bytesutil.MaxIntLen+len(tail))
 	msg = strconv.AppendInt(append(msg, head...), int64(len(a.filterDatasources(list))), 10)
 	return &backend.CheckHealthResult{
@@ -119,11 +119,11 @@ func (a *App) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequest) (*
 	}, nil
 }
 
-// filterDatasources keeps VictoriaMetrics-type datasources that pass the allowlist, sorted by name.
+// filterDatasources keeps supported datasources that pass the allowlist, sorted by name.
 func (a *App) filterDatasources(list []datasourceInfo) []datasourceInfo {
 	out := make([]datasourceInfo, 0, len(list))
 	for _, ds := range list {
-		if ds.Type == vmDatasourceType && a.settings.allows(ds.UID) {
+		if vmclient.IsSupportedDatasourceType(ds.Type) && a.settings.allows(ds.UID) {
 			out = append(out, ds)
 		}
 	}
@@ -131,7 +131,7 @@ func (a *App) filterDatasources(list []datasourceInfo) []datasourceInfo {
 	return out
 }
 
-// handleListDatasources returns the VictoriaMetrics datasources the Explorer can use. Only UID,
+// handleListDatasources returns the supported datasources the Explorer can use. Only UID,
 // name and type are returned — never URLs or credentials.
 func (a *App) handleListDatasources(w http.ResponseWriter, r *http.Request) {
 	if !a.checkOrg(w, r) {

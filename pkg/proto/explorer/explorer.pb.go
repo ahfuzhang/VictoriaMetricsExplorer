@@ -667,7 +667,6 @@ type CapabilitiesResponse struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
 	Schema                  *SchemaVersion         `protobuf:"bytes,1,opt,name=schema,proto3" json:"schema,omitempty"`
 	Meta                    *ResponseMeta          `protobuf:"bytes,2,opt,name=meta,proto3" json:"meta,omitempty"`
-	UpstreamVersion         string                 `protobuf:"bytes,3,opt,name=upstream_version,json=upstreamVersion,proto3" json:"upstream_version,omitempty"`
 	UpstreamProduct         string                 `protobuf:"bytes,4,opt,name=upstream_product,json=upstreamProduct,proto3" json:"upstream_product,omitempty"` // "VictoriaMetrics", "VictoriaMetrics Cluster", etc.
 	SupportsNativeHistogram bool                   `protobuf:"varint,5,opt,name=supports_native_histogram,json=supportsNativeHistogram,proto3" json:"supports_native_histogram,omitempty"`
 	SupportsMetricsql       bool                   `protobuf:"varint,6,opt,name=supports_metricsql,json=supportsMetricsql,proto3" json:"supports_metricsql,omitempty"`
@@ -725,13 +724,6 @@ func (x *CapabilitiesResponse) GetMeta() *ResponseMeta {
 		return x.Meta
 	}
 	return nil
-}
-
-func (x *CapabilitiesResponse) GetUpstreamVersion() string {
-	if x != nil {
-		return x.UpstreamVersion
-	}
-	return ""
 }
 
 func (x *CapabilitiesResponse) GetUpstreamProduct() string {
@@ -3619,11 +3611,10 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\n" +
 	"confidence\x18\x03 \x01(\x02R\n" +
 	"confidence\x12\x1a\n" +
-	"\bdetected\x18\x04 \x01(\bR\bdetected\"\x87\x05\n" +
+	"\bdetected\x18\x04 \x01(\bR\bdetected\"\xf4\x04\n" +
 	"\x14CapabilitiesResponse\x12/\n" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12)\n" +
-	"\x10upstream_version\x18\x03 \x01(\tR\x0fupstreamVersion\x12)\n" +
 	"\x10upstream_product\x18\x04 \x01(\tR\x0fupstreamProduct\x12:\n" +
 	"\x19supports_native_histogram\x18\x05 \x01(\bR\x17supportsNativeHistogram\x12-\n" +
 	"\x12supports_metricsql\x18\x06 \x01(\bR\x11supportsMetricsql\x12=\n" +
@@ -3634,7 +3625,7 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\x10max_facet_values\x18\f \x01(\rR\x0emaxFacetValues\x12(\n" +
 	"\x10max_chart_series\x18\r \x01(\rR\x0emaxChartSeries\x126\n" +
 	"\x17max_concurrent_requests\x18\x0e \x01(\rR\x15maxConcurrentRequests\x124\n" +
-	"\x16knowledge_base_version\x18\x0f \x01(\tR\x14knowledgeBaseVersion\"\xb1\x02\n" +
+	"\x16knowledge_base_version\x18\x0f \x01(\tR\x14knowledgeBaseVersionJ\x04\b\x03\x10\x04R\x10upstream_version\"\xb1\x02\n" +
 	"\x12MetricIndexRequest\x12)\n" +
 	"\x05range\x18\x01 \x01(\v2\x13.explorer.TimeRangeR\x05range\x12\x16\n" +
 	"\x06search\x18\x02 \x01(\tR\x06search\x122\n" +

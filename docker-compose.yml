@@ -24,6 +24,16 @@ services:
       - grafana-data:/var/lib/grafana
     depends_on:
       - victoriametrics
+      - prometheus
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./tests/dev/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
 
   victoriametrics:
     image: victoriametrics/victoria-metrics:latest
@@ -39,3 +49,4 @@ services:
 volumes:
   grafana-data:
   vm-data:
+  prometheus-data:

@@ -91,14 +91,11 @@ func (h *Handlers) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) buildCapabilitiesResponse(ctx context.Context, requestID string) (*explorerpb.CapabilitiesResponse, error) {
 	// Detect label mappings. This is also the connectivity check: every Explorer feature needs the
-	// labels API, so if it fails the datasource is unusable. (A missing buildinfo is not fatal.)
+	// labels API, so if it fails the datasource is unusable.
 	labelMappings, err := h.detectLabelMappings(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	// Try to get upstream version
-	version := h.router.client.GetUpstreamVersionPublic(ctx)
 
 	lim := h.router.limits
 	return &explorerpb.CapabilitiesResponse{
@@ -107,9 +104,8 @@ func (h *Handlers) buildCapabilitiesResponse(ctx context.Context, requestID stri
 			RequestId:      requestID,
 			RangePrecision: explorerpb.RangePrecision_RANGE_PRECISION_EXACT,
 		},
-		UpstreamVersion:       version,
-		UpstreamProduct:       "VictoriaMetrics",
-		SupportsMetricsql:     true,
+		UpstreamProduct:       h.router.config.UpstreamProduct(),
+		SupportsMetricsql:     h.router.config.SupportsMetricsQL(),
 		LabelMappings:         labelMappings,
 		MaxMetricNames:        uint32(lim.MaxMetricNames),
 		MaxSeriesScan:         uint32(lim.MaxSeriesScan),

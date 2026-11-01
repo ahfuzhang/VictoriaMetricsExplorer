@@ -67,12 +67,14 @@ func appURL(cfg *config.GrafanaCfg) (string, error) {
 	return baseURL, nil
 }
 
-// Config holds what the per-datasource client needs. The VictoriaMetrics URL, tenant path,
+// Config holds what the per-datasource client needs. The upstream URL, tenant path,
 // credentials and TLS settings all live in the Grafana datasource itself; this plugin only
 // ever names the datasource by UID and lets Grafana's datasource proxy apply them.
 type Config struct {
-	// UID is the Grafana datasource UID (of a VictoriaMetrics-type datasource).
+	// UID is the Grafana datasource UID.
 	UID string
+	// DatasourceType is the Grafana plugin ID. Defaults to VictoriaMetrics for existing callers.
+	DatasourceType string
 	// OrgID is the Grafana organization the datasource belongs to (cache isolation).
 	OrgID int64
 
@@ -99,7 +101,7 @@ type Config struct {
 // DefaultTimeout is the upstream request timeout when none is configured.
 const DefaultTimeout = 120 * time.Second
 
-// Client queries one VictoriaMetrics datasource through Grafana's datasource proxy
+// Client queries one Prometheus or VictoriaMetrics datasource through Grafana's datasource proxy
 // (/api/datasources/proxy/uid/<uid>/...). All upstream communication goes through this
 // client — business code must not construct URLs or inject auth directly.
 type Client struct {
@@ -113,6 +115,12 @@ type Client struct {
 func New(cfg Config, lim *limits.Limits, obs *observability.Observability) (*Client, error) {
 	if cfg.UID == "" {
 		return nil, fmt.Errorf("datasource UID is required")
+	}
+	if cfg.DatasourceType == "" {
+		cfg.DatasourceType = VictoriaMetricsDatasourceType
+	}
+	if !IsSupportedDatasourceType(cfg.DatasourceType) {
+		return nil, fmt.Errorf("unsupported datasource type %q", cfg.DatasourceType)
 	}
 	if cfg.Credentials == nil {
 		cfg.Credentials = GrafanaCredentials
@@ -318,7 +326,7 @@ func TruncateBody(body []byte, max int) string {
 }
 
 // ============================================================================
-// VictoriaMetrics API methods
+// Prometheus-compatible HTTP API methods
 // ============================================================================
 
 // labelValuesResponse is the JSON response from /api/v1/label/:name/values
@@ -472,9 +480,8 @@ func (c *Client) Query(ctx context.Context, query string, t time.Time) (jsontext
 	return resp.Data, nil
 }
 
-// getUpstreamVersion tries to fetch the VictoriaMetrics version from the buildinfo endpoint.
+// getUpstreamVersion tries to fetch the upstream version from the buildinfo endpoint.
 func (c *Client) getUpstreamVersion(ctx context.Context) string {
-	// VictoriaMetrics has a /api/v1/status/buildinfo endpoint
 	resp, err := c.Do(ctx, http.MethodGet, "/api/v1/status/buildinfo", nil, nil)
 	if err != nil {
 		return ""
@@ -499,7 +506,7 @@ func (c *Client) getUpstreamVersion(ctx context.Context) string {
 	return info.Data.Version
 }
 
-// GetUpstreamVersionPublic tries to fetch the VictoriaMetrics version.
+// GetUpstreamVersionPublic tries to fetch the upstream version.
 // Returns empty string if unavailable.
 func (c *Client) GetUpstreamVersionPublic(ctx context.Context) string {
 	return c.getUpstreamVersion(ctx)
