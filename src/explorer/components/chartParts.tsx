@@ -84,7 +84,7 @@ export const HeatmapView: React.FC<{
   rateUnit: string;
 }> = ({ frames, formatBucket, rateUnit }) => {
   const styles = useStyles2(getStyles);
-  const rows = heatmapRows(frames);
+  const { rows, candidates } = heatmapRows(frames);
   const values = rows.flatMap((row) => row.values);
   const minimum = values.length > 0 ? Math.min(...values) : 0;
   const maximum = Math.max(0, ...values);
@@ -116,6 +116,14 @@ export const HeatmapView: React.FC<{
         </div>
       ))}
       <div className={styles.heatmapLegend}>
+        {candidates > rows.length && (
+          <span
+            className={styles.heatmapNote}
+            title="The adjacent buckets holding the most observations; the table below lists every bucket."
+          >
+            busiest {rows.length} of {candidates} buckets
+          </span>
+        )}
         <span>
           lower <b className={styles.heatmapLegendValue}>{formatCount(minimum)}</b>
         </span>
@@ -128,7 +136,7 @@ export const HeatmapView: React.FC<{
   );
 };
 
-interface HeatmapRow {
+export interface HeatmapRow {
   label: string;
   values: number[];
 }
@@ -150,7 +158,17 @@ export function hasBucketLabels(frames: DataFrame[]): boolean {
   return numeric > 0;
 }
 
-function heatmapRows(frames: DataFrame[]): HeatmapRow[] {
+// The most bucket rows a heatmap draws: each row takes about 10px of the chart's height.
+const MAX_HEATMAP_ROWS = 30;
+
+/**
+ * Bucket rows of a heatmap, highest bucket first. Buckets that stayed empty below the lowest or
+ * above the highest observation are left out: VictoriaMetrics keeps exporting every vmrange bucket
+ * that was ever hit, so a histogram can return a hundred buckets, most of them empty. When more
+ * than MAX_HEATMAP_ROWS remain, the adjacent buckets holding the most observations are kept.
+ * candidates is how many buckets were left to choose from.
+ */
+export function heatmapRows(frames: DataFrame[]): { rows: HeatmapRow[]; candidates: number } {
   const rows: HeatmapRow[] = [];
   for (const frame of frames) {
     for (const field of frame.fields) {
@@ -167,10 +185,37 @@ function heatmapRows(frames: DataFrame[]): HeatmapRow[] {
     }
   }
 
-  return rows
-    .sort((left, right) => bucketSortValue(left.label) - bucketSortValue(right.label))
-    .slice(-30)
-    .reverse();
+  rows.sort((left, right) => bucketSortValue(left.label) - bucketSortValue(right.label));
+
+  const observed = (row: HeatmapRow) => row.values.some((value) => value !== 0);
+  const first = rows.findIndex(observed);
+  if (first < 0) {
+    // Nothing was observed: the highest buckets show the empty range.
+    return { rows: rows.slice(-MAX_HEATMAP_ROWS).reverse(), candidates: rows.length };
+  }
+  let last = rows.length - 1;
+  while (!observed(rows[last])) {
+    last--;
+  }
+  const candidates = last - first + 1;
+
+  // Slide a MAX_HEATMAP_ROWS window over the observed buckets and keep the one with the largest total.
+  const totals = rows.map((row) => row.values.reduce((sum, value) => sum + value, 0));
+  const size = Math.min(MAX_HEATMAP_ROWS, candidates);
+  let windowTotal = 0;
+  for (let index = first; index < first + size; index++) {
+    windowTotal += totals[index];
+  }
+  let start = first;
+  let bestTotal = windowTotal;
+  for (let index = first + size; index <= last; index++) {
+    windowTotal += totals[index] - totals[index - size];
+    if (windowTotal > bestTotal) {
+      bestTotal = windowTotal;
+      start = index - size + 1;
+    }
+  }
+  return { rows: rows.slice(start, start + size).reverse(), candidates };
 }
 
 function bucketSortValue(label: string): number {
@@ -354,6 +399,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     marginTop: theme.spacing(0.75),
     color: theme.colors.text.secondary,
     fontSize: theme.typography.size.xs,
+  }),
+  heatmapNote: css({
+    marginRight: 'auto',
   }),
   heatmapLegendValue: css({
     color: theme.colors.text.primary,

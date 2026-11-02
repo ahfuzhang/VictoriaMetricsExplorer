@@ -104,18 +104,27 @@ type Scope struct {
 // Get decodes the entry stored under key into msg, provided it was written at most maxAge ago.
 // A missing, expired or undecodable entry is a miss, and so is every entry when maxAge <= 0.
 func (s *Scope) Get(key string, maxAge time.Duration, msg proto.Message) bool {
+	_, ok := s.GetWritten(key, maxAge, msg)
+	return ok
+}
+
+// GetWritten is Get that also returns when the entry was written.
+func (s *Scope) GetWritten(key string, maxAge time.Duration, msg proto.Message) (time.Time, bool) {
 	v, ok := s.get(key, maxAge)
 	if !ok {
-		return false
+		return time.Time{}, false
 	}
 	payload := v.Payload
 	if v.Zstd {
 		var err error
 		if payload, err = decoder.DecodeAll(payload, nil); err != nil {
-			return false
+			return time.Time{}, false
 		}
 	}
-	return proto.Unmarshal(payload, msg) == nil
+	if proto.Unmarshal(payload, msg) != nil {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(v.WrittenAtMs), true
 }
 
 // GetZstd is Get for a message that is sent on unchanged: it returns the message's protobuf
@@ -156,6 +165,12 @@ func (s *Scope) get(key string, maxAge time.Duration) (*explorerpb.CacheValue, b
 // Set stores msg under key, stamped with the current time. It is best effort: a message that
 // cannot be marshalled is not stored, and fastcache may drop any entry at any time.
 func (s *Scope) Set(key string, msg proto.Message) {
+	s.SetWritten(key, msg, s.c.now())
+}
+
+// SetWritten is Set with the write time given instead of now. An entry rewritten with the time
+// GetWritten returned for it keeps its age, so updating it never postpones its expiry.
+func (s *Scope) SetWritten(key string, msg proto.Message, writtenAt time.Time) {
 	if s.c.closed.Load() {
 		return
 	}
@@ -163,7 +178,7 @@ func (s *Scope) Set(key string, msg proto.Message) {
 	if err != nil {
 		return
 	}
-	v := &explorerpb.CacheValue{WrittenAtMs: s.c.now().UnixMilli(), Payload: payload}
+	v := &explorerpb.CacheValue{WrittenAtMs: writtenAt.UnixMilli(), Payload: payload}
 	if len(payload) > compressThreshold {
 		v.Payload, v.Zstd = encoder.EncodeAll(payload, nil), true
 	}

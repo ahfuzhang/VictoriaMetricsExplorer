@@ -108,6 +108,33 @@ func TestValuesCarryTheirWriteTime(t *testing.T) {
 	}
 }
 
+func TestSetWrittenKeepsTheEntrysAge(t *testing.T) {
+	c, clk := newTestCache(t, 32<<20)
+	s := c.Scope()
+
+	s.Set("k", &explorerpb.MetricTypeCacheEntry{Type: "gauge"})
+	written := clk.t
+
+	// An update rewritten with the time GetWritten returned still expires with the original.
+	clk.advance(40 * time.Second)
+	var got explorerpb.MetricTypeCacheEntry
+	writtenAt, ok := s.GetWritten("k", time.Minute, &got)
+	if !ok || !writtenAt.Equal(written) {
+		t.Fatalf("GetWritten = %v, %v; want %v, true", writtenAt, ok, written)
+	}
+	s.SetWritten("k", &explorerpb.MetricTypeCacheEntry{Type: "gauge", Zero: true}, writtenAt)
+	if !s.Get("k", time.Minute, &got) || !got.Zero {
+		t.Fatalf("expected the updated value, got %v", &got)
+	}
+	clk.advance(30 * time.Second)
+	if s.Get("k", time.Minute, &got) {
+		t.Fatal("the updated entry must expire a minute after its first write")
+	}
+	if _, ok := s.GetWritten("never-set", time.Minute, &got); ok {
+		t.Fatal("expected a miss for a key that was never set")
+	}
+}
+
 func TestCompressesPayloadsLongerThan256Bytes(t *testing.T) {
 	c, _ := newTestCache(t, 32<<20)
 	s := c.Scope()

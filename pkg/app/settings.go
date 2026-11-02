@@ -11,6 +11,7 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/resource"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
 
@@ -34,6 +35,9 @@ type Settings struct {
 	// Time and cache
 	DefaultTimeRange time.Duration
 	CacheTTL         time.Duration
+	// MetricIndexCacheTTL is how long the metric names of a scope (a name prefix, pod group or node)
+	// and the metric types inferred for them are cached.
+	MetricIndexCacheTTL time.Duration
 	// LocalCacheSize is the capacity in bytes of the in-memory cache every datasource shares.
 	LocalCacheSize int
 
@@ -56,29 +60,31 @@ var byteUnits = map[string]float64{
 // ParseSettings extracts Settings from Grafana's AppInstanceSettings.
 func ParseSettings(settings backend.AppInstanceSettings) (*Settings, error) {
 	s := &Settings{
-		PodLabel:         "pod",
-		NamespaceLabel:   "namespace",
-		NodeLabel:        "node",
-		ClusterLabel:     "cluster",
-		DefaultTimeRange: time.Hour,
-		CacheTTL:         2 * time.Minute,
-		LocalCacheSize:   cache.DefaultMaxBytes,
-		UpstreamTimeout:  vmclient.DefaultTimeout,
+		PodLabel:            "pod",
+		NamespaceLabel:      "namespace",
+		NodeLabel:           "node",
+		ClusterLabel:        "cluster",
+		DefaultTimeRange:    time.Hour,
+		CacheTTL:            2 * time.Minute,
+		MetricIndexCacheTTL: resource.DefaultMetricIndexCacheTTL,
+		LocalCacheSize:      cache.DefaultMaxBytes,
+		UpstreamTimeout:     vmclient.DefaultTimeout,
 	}
 	if len(settings.JSONData) == 0 {
 		return s, nil
 	}
 
 	var jd struct {
-		DatasourceUIDs   []string `json:"datasourceUids"`
-		PodLabel         string   `json:"podLabel"`
-		NamespaceLabel   string   `json:"namespaceLabel"`
-		NodeLabel        string   `json:"nodeLabel"`
-		ClusterLabel     string   `json:"clusterLabel"`
-		DefaultTimeRange string   `json:"defaultTimeRange"` // e.g. "1h", "6h"
-		CacheTTL         string   `json:"cacheTTL"`         // e.g. "2m", "5m"
-		LocalCacheSize   any      `json:"localCacheSize"`   // e.g. "1GB", "512MB", or a number of bytes
-		UpstreamTimeout  string   `json:"upstreamTimeout"`  // e.g. "120s", "5m"
+		DatasourceUIDs      []string `json:"datasourceUids"`
+		PodLabel            string   `json:"podLabel"`
+		NamespaceLabel      string   `json:"namespaceLabel"`
+		NodeLabel           string   `json:"nodeLabel"`
+		ClusterLabel        string   `json:"clusterLabel"`
+		DefaultTimeRange    string   `json:"defaultTimeRange"`    // e.g. "1h", "6h"
+		CacheTTL            string   `json:"cacheTTL"`            // e.g. "2m", "5m"
+		MetricIndexCacheTTL string   `json:"metricIndexCacheTTL"` // e.g. "30m", "1h"
+		LocalCacheSize      any      `json:"localCacheSize"`      // e.g. "1GB", "512MB", or a number of bytes
+		UpstreamTimeout     string   `json:"upstreamTimeout"`     // e.g. "120s", "5m"
 	}
 	if err := json.Unmarshal(settings.JSONData, &jd); err != nil {
 		return nil, fmt.Errorf("parse jsonData: %w", err)
@@ -114,6 +120,13 @@ func ParseSettings(settings backend.AppInstanceSettings) (*Settings, error) {
 			return nil, fmt.Errorf("cacheTTL %q is not a positive duration", jd.CacheTTL)
 		}
 		s.CacheTTL = d
+	}
+	if jd.MetricIndexCacheTTL != "" {
+		d, err := time.ParseDuration(jd.MetricIndexCacheTTL)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("metricIndexCacheTTL %q is not a positive duration", jd.MetricIndexCacheTTL)
+		}
+		s.MetricIndexCacheTTL = d
 	}
 	if jd.LocalCacheSize != nil {
 		// A JSON number arrives as a float64, which prints as a plain count of bytes.

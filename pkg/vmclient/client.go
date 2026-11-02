@@ -93,6 +93,8 @@ type Config struct {
 	// Time and cache
 	DefaultTimeRange time.Duration
 	CacheTTL         time.Duration
+	// MetricIndexCacheTTL is how long metric-index lists and inferred metric types are cached.
+	MetricIndexCacheTTL time.Duration
 
 	// Timeout bounds each upstream request, including reading its body. Defaults to DefaultTimeout.
 	Timeout time.Duration

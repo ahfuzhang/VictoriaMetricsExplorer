@@ -76,6 +76,9 @@ export const MetricList: React.FC<Props> = ({
   // The datasource the current `metrics` came from; right after a datasource switch the list is
   // still the previous datasource's until its reload lands.
   const metricsOwnerRef = useRef('');
+  // The scope the current `metrics` were listed in; type requests name it so the backend can write
+  // the types into that list.
+  const metricsScopeRef = useRef<ScopeParams>({});
   const pageSize = Math.max(1, Math.min(200, capabilities.maxMetricNames));
   const startMs = timeRange.from.valueOf();
   const endMs = timeRange.to.valueOf();
@@ -90,18 +93,22 @@ export const MetricList: React.FC<Props> = ({
     if (metricsOwnerRef.current !== datasourceUID) {
       return;
     }
-    // Histograms already carry their type from the index, but are still asked about so the backend
-    // can report the ones without observations.
-    const missing = metrics.map((metric) => metric.queryMetric).filter((name) => !typesRequestedRef.current.has(name));
+    // The index carries the type and zero flag of every metric the backend has looked at, so only the
+    // others are asked about. Histograms and _total counters already have their type, but are still
+    // asked about so the backend can report the ones that are always 0.
+    const missing = metrics
+      .filter((metric) => !metric.zeroChecked && !typesRequestedRef.current.has(metric.queryMetric))
+      .map((metric) => metric.queryMetric);
     if (missing.length === 0) {
       return;
     }
     missing.forEach((name) => typesRequestedRef.current.add(name));
 
     const generation = typeGenerationRef.current;
+    const scopeParams = metricsScopeRef.current;
     for (let offset = 0; offset < missing.length; offset += TYPE_REQUEST_SIZE) {
       const batch = missing.slice(offset, offset + TYPE_REQUEST_SIZE);
-      fetchMetricTypes(datasourceUID, { metrics: batch, startMs, endMs })
+      fetchMetricTypes(datasourceUID, { metrics: batch, ...scopeParams, startMs, endMs })
         .then((response) => {
           if (generation === typeGenerationRef.current) {
             setTypeResults((previous) => ({
@@ -131,12 +138,11 @@ export const MetricList: React.FC<Props> = ({
       setLoading(true);
       setError('');
       try {
+        const params = scopeParams(scope);
         const response = await fetchMetricIndex(datasourceUID, {
           search,
           groupMode: 'prefix',
-          group: scope.kind === 'group' ? scope.group : undefined,
-          podGroup: scope.kind === 'pod' ? scope.group : undefined,
-          node: scope.kind === 'node' ? scope.node : undefined,
+          ...params,
           page: pageNumber,
           pageSize,
           sort: 'name',
@@ -148,6 +154,7 @@ export const MetricList: React.FC<Props> = ({
         }
 
         metricsOwnerRef.current = datasourceUID;
+        metricsScopeRef.current = params;
         setMetrics((previous) => {
           if (!append) {
             return response.metrics;
@@ -193,7 +200,9 @@ export const MetricList: React.FC<Props> = ({
     [loadMetrics, loading, page, totalPages]
   );
 
-  const metricType = (metric: MetricInfo) => metric.type ?? types[metric.queryMetric];
+  // undefined while the backend has not looked at a metric whose name does not tell its type.
+  const metricType = (metric: MetricInfo): MetricKind | undefined =>
+    types[metric.queryMetric] ?? (metric.zeroChecked || metric.type !== 'unknown' ? metric.type : undefined);
   // Types are only known for loaded pages, so the filter applies to the loaded metrics; metrics whose
   // type has not come back yet stay hidden until it does.
   const visibleMetrics = typeFilter ? metrics.filter((metric) => metricType(metric) === typeFilter) : metrics;
@@ -257,7 +266,7 @@ export const MetricList: React.FC<Props> = ({
               const badge = metricTypeBadge(type);
               // A metric that is always 0 (a stat value or an idle counter) carries no information; it
               // stays listed but greyed out.
-              const zeroValue = zeroValues[metric.queryMetric] === true;
+              const zeroValue = zeroValues[metric.queryMetric] === true || (metric.zeroChecked && metric.zero);
               return (
                 <li key={metric.queryMetric}>
                   <button
@@ -321,6 +330,17 @@ export const MetricList: React.FC<Props> = ({
     </div>
   );
 };
+
+/** The metric-index scope of the metrics listed for a scope. */
+type ScopeParams = { group?: string; podGroup?: string; node?: string };
+
+function scopeParams(scope: MetricScope): ScopeParams {
+  return {
+    group: scope.kind === 'group' ? scope.group : undefined,
+    podGroup: scope.kind === 'pod' ? scope.group : undefined,
+    node: scope.kind === 'node' ? scope.node : undefined,
+  };
+}
 
 const TYPE_LABELS: Record<Exclude<MetricKind, 'unknown'>, string> = {
   counter: 'counter',

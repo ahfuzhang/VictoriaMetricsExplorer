@@ -39,10 +39,26 @@
 ### Changed
 
 - Refresh moves a relative time range ("last 1 hour") to the current time
+- metric-index caches one list of metric names per scope (a metric name prefix, a pod group or a
+  node) and day-aligned range, instead of one response per page and search: paging, searching and
+  sorting no longer reach the datasource, and a prefix group is cut from the cached list of every
+  metric. Lists and inferred metric types are kept for `metricIndexCacheTTL` (app `jsonData`,
+  default `30m`); new metric names show up once it expires
+- metric-index rows carry `bit_flags` (bit 0: the backend has looked at the metric's data, bit 1:
+  every sample in the last hour is 0) and always a `type` (`unknown` until inferred, except
+  histograms and `_total` counters). The metric list asks metric-types only about rows without bit
+  0, and metric-types writes its results back into the cached list (keeping its expiry), so a list
+  seen before needs no metric-types call. Histograms are told apart from that list, without fetching
+  every metric name
 
 ### Removed
 
 - Browser-local favorites (`vm_explorer_favorites`) and the Workspace › Favorites scope
+
+### Fixed
+
+- By Pod puts every GitLab Runner job pod (`runner-<token>-project-<id>-concurrent-<n>-<random>`)
+  in one `runner` group, instead of one group per runner token and project
 
 ## 0.1.0 (Unreleased)
 

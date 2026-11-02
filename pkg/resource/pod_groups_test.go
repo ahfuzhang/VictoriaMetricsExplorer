@@ -30,6 +30,14 @@ func TestPodPrefix(t *testing.T) {
 		{"backup-28473920-bc7xz", "backup"},
 		// Hex-like hashes from other generators
 		{"svc-a1b2c3d4-x7zpq", "svc"},
+		// GitLab Runner: runner-<token>-project-<id>-concurrent-<n>-<random>
+		{"runner-yi3xexht-project-4009-concurrent-0-8d2kq7xz", "runner"},
+		{"runner-yi3xexht-project-4009-concurent-0-abcde", "runner"},
+		{"runner-t1-abcde-project-12-concurrent-3-x7zpq", "runner"},
+		{"runner-yi3xexht-project-4009-concurrent-0", "runner"},
+		{"runner-api-6f9c7b5d8-x2x7z", "runner-api"},
+		{"runner-x-project-abc-0", "runner-x-project-abc"},
+		{"runner-project-12-concurrent-0", "runner-project-12-concurrent"},
 		// Names chosen by people stay whole
 		{"myapp-v2", "myapp-v2"},
 		{"s3proxy", "s3proxy"},
@@ -54,10 +62,13 @@ func TestBuildPodGroupsKeepsSimilarNamesApart(t *testing.T) {
 		"mahjong-ways2-5c6b8d9f4-zz7kq",
 		"vmstorage-1",
 		"vmstorage-0",
+		"runner-yi3xexht-project-4009-concurrent-0-8d2kq7xz",
+		"runner-ab12cd34-project-77-concurrent-1-x7zpq",
 	})
 	want := []podGroupEntry{
 		{Name: "mahjong-ways", Count: 2, Pods: []string{"mahjong-ways-7d4f8c9b7-b2h9w", "mahjong-ways-7d4f8c9b7-k8pnx"}},
 		{Name: "mahjong-ways2", Count: 2, Pods: []string{"mahjong-ways2-5c6b8d9f4-xq2zr", "mahjong-ways2-5c6b8d9f4-zz7kq"}},
+		{Name: "runner", Count: 2, Pods: []string{"runner-ab12cd34-project-77-concurrent-1-x7zpq", "runner-yi3xexht-project-4009-concurrent-0-8d2kq7xz"}},
 		{Name: "vmstorage", Count: 2, Pods: []string{"vmstorage-0", "vmstorage-1"}},
 	}
 	if !reflect.DeepEqual(groups, want) {

@@ -284,8 +284,14 @@ func TestMetricIndexIsCachedPerDatasource(t *testing.T) {
 	if g.proxyCalls.Load() != afterFirst {
 		t.Fatalf("second identical request should be served from cache")
 	}
-	if !proto.Equal(second.metricIndex(t), first.metricIndex(t)) {
-		t.Fatal("the cached response should decode to the original one")
+	firstResp, secondResp := first.metricIndex(t), second.metricIndex(t)
+	if firstResp.Meta.GetCacheHit() || !secondResp.Meta.GetCacheHit() {
+		t.Fatal("only the second response should come from the cache")
+	}
+	// Only the meta (request id, timing, cache hit) tells them apart.
+	firstResp.Meta, secondResp.Meta = nil, nil
+	if !proto.Equal(secondResp, firstResp) {
+		t.Fatal("the cached list should give the original response")
 	}
 
 	// Same request against a different datasource must not be served from vm1's cache.
@@ -600,19 +606,22 @@ func TestTargetsAreEvictedBeyondTheCap(t *testing.T) {
 
 func TestParseSettings(t *testing.T) {
 	s, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(
-		`{"datasourceUids":[" vm1 ","","vm2"],"podLabel":"pod_name","defaultTimeRange":"6h","cacheTTL":"5m","upstreamTimeout":"45s"}`)})
+		`{"datasourceUids":[" vm1 ","","vm2"],"podLabel":"pod_name","defaultTimeRange":"6h","cacheTTL":"5m",` +
+			`"metricIndexCacheTTL":"1h","upstreamTimeout":"45s"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(s.DatasourceUIDs) != 2 || s.DatasourceUIDs[0] != "vm1" || s.PodLabel != "pod_name" ||
 		s.DefaultTimeRange != 6*time.Hour || s.CacheTTL != 5*time.Minute || s.NodeLabel != "node" ||
-		s.UpstreamTimeout != 45*time.Second {
+		s.MetricIndexCacheTTL != time.Hour || s.UpstreamTimeout != 45*time.Second {
 		t.Fatalf("unexpected settings: %+v", s)
 	}
-	if s, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{}`)}); err != nil || s.UpstreamTimeout != 120*time.Second {
-		t.Fatalf("expected the 120s upstreamTimeout default, got %v (err=%v)", s, err)
+	if s, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{}`)}); err != nil ||
+		s.UpstreamTimeout != 120*time.Second || s.MetricIndexCacheTTL != 30*time.Minute {
+		t.Fatalf("expected the 120s upstreamTimeout and 30m metricIndexCacheTTL defaults, got %v (err=%v)", s, err)
 	}
-	for _, bad := range []string{`{"cacheTTL":"soon"}`, `{"defaultTimeRange":"-1h"}`, `{"datasourceUids":"vm1"}`, `{"upstreamTimeout":"0s"}`} {
+	for _, bad := range []string{`{"cacheTTL":"soon"}`, `{"defaultTimeRange":"-1h"}`, `{"datasourceUids":"vm1"}`,
+		`{"upstreamTimeout":"0s"}`, `{"metricIndexCacheTTL":"-30m"}`} {
 		if _, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(bad)}); err == nil {
 			t.Fatalf("expected %s to be rejected", bad)
 		}

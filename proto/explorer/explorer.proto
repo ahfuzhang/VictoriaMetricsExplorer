@@ -145,6 +145,18 @@ message MetricGroup {
   uint32 count = 2;
 }
 
+// Bits of MetricInfo.bit_flags.
+enum MetricFlag {
+  METRIC_FLAG_UNSPECIFIED = 0;  // no flag set
+  // Bit 0: metric-types has looked at the metric, so type is final and METRIC_FLAG_ZERO is known.
+  // Without it the metric still has to be sent to metric-types.
+  METRIC_FLAG_ZERO_CHECKED = 1;
+  // Bit 1: every sample in the last hour is 0.
+  METRIC_FLAG_ZERO = 2;
+  // Bit 2: a collapsed histogram that has a <base>_count metric (used by the backend).
+  METRIC_FLAG_HISTOGRAM_COUNT = 4;
+}
+
 message MetricInfo {
   // Name displayed by the metric picker; histogram suffixes are already removed.
   string name = 1;
@@ -152,8 +164,12 @@ message MetricInfo {
   string group = 2;
   // Real metric name used by facet and chart queries (e.g. <base>_bucket for a histogram).
   string query_metric = 3;
-  // Type known while building the index ("histogram" for collapsed histograms), empty otherwise.
+  // "counter" | "gauge" | "histogram" | "stat_value" | "unknown". The name alone gives "histogram"
+  // (collapsed histograms) and "counter" (a _total suffix); any other metric is "unknown" until
+  // metric-types has inferred its type from its data (METRIC_FLAG_ZERO_CHECKED).
   string type = 4;
+  // MetricFlag bits.
+  uint64 bit_flags = 5;
 }
 
 message MetricIndexResponse {
@@ -161,7 +177,8 @@ message MetricIndexResponse {
   ResponseMeta meta = 2;
 
   repeated MetricInfo metrics = 3;
-  repeated MetricGroup groups = 4;   // only filled in prefix mode
+  // Only filled in prefix mode; with a group set, that group is the only one.
+  repeated MetricGroup groups = 4;
   uint32 total_count = 5;
   uint32 page = 6;
   uint32 page_size = 7;
@@ -174,9 +191,15 @@ message MetricIndexResponse {
 
 message MetricTypesRequest {
   repeated string metrics = 1;
-  // Only chooses the window used to look up sibling names for histogram detection; the data used
-  // to infer counter/gauge/stat value is always the last hour.
+  // With group, pod_group and node: the metric-index request the names were listed by. Its cached
+  // list tells the histograms apart, and the types inferred here are written back to it, so the
+  // next metric-index answer already carries them. Without that list, histograms are detected from
+  // the metric names in the range. The data used to infer counter/gauge/stat value is always the
+  // last hour.
   TimeRange range = 2;
+  string group = 3;      // the prefix group, in prefix mode
+  string pod_group = 4;
+  string node = 5;
 }
 
 message MetricTypesResponse {

@@ -122,6 +122,63 @@ func (GroupMode) EnumDescriptor() ([]byte, []int) {
 	return file_explorer_explorer_proto_rawDescGZIP(), []int{1}
 }
 
+// Bits of MetricInfo.bit_flags.
+type MetricFlag int32
+
+const (
+	MetricFlag_METRIC_FLAG_UNSPECIFIED MetricFlag = 0 // no flag set
+	// Bit 0: metric-types has looked at the metric, so type is final and METRIC_FLAG_ZERO is known.
+	// Without it the metric still has to be sent to metric-types.
+	MetricFlag_METRIC_FLAG_ZERO_CHECKED MetricFlag = 1
+	// Bit 1: every sample in the last hour is 0.
+	MetricFlag_METRIC_FLAG_ZERO MetricFlag = 2
+	// Bit 2: a collapsed histogram that has a <base>_count metric (used by the backend).
+	MetricFlag_METRIC_FLAG_HISTOGRAM_COUNT MetricFlag = 4
+)
+
+// Enum value maps for MetricFlag.
+var (
+	MetricFlag_name = map[int32]string{
+		0: "METRIC_FLAG_UNSPECIFIED",
+		1: "METRIC_FLAG_ZERO_CHECKED",
+		2: "METRIC_FLAG_ZERO",
+		4: "METRIC_FLAG_HISTOGRAM_COUNT",
+	}
+	MetricFlag_value = map[string]int32{
+		"METRIC_FLAG_UNSPECIFIED":     0,
+		"METRIC_FLAG_ZERO_CHECKED":    1,
+		"METRIC_FLAG_ZERO":            2,
+		"METRIC_FLAG_HISTOGRAM_COUNT": 4,
+	}
+)
+
+func (x MetricFlag) Enum() *MetricFlag {
+	p := new(MetricFlag)
+	*p = x
+	return p
+}
+
+func (x MetricFlag) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MetricFlag) Descriptor() protoreflect.EnumDescriptor {
+	return file_explorer_explorer_proto_enumTypes[2].Descriptor()
+}
+
+func (MetricFlag) Type() protoreflect.EnumType {
+	return &file_explorer_explorer_proto_enumTypes[2]
+}
+
+func (x MetricFlag) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MetricFlag.Descriptor instead.
+func (MetricFlag) EnumDescriptor() ([]byte, []int) {
+	return file_explorer_explorer_proto_rawDescGZIP(), []int{2}
+}
+
 type SchemaVersion struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Major         uint32                 `protobuf:"varint,1,opt,name=major,proto3" json:"major,omitempty"`
@@ -972,8 +1029,12 @@ type MetricInfo struct {
 	Group string `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`
 	// Real metric name used by facet and chart queries (e.g. <base>_bucket for a histogram).
 	QueryMetric string `protobuf:"bytes,3,opt,name=query_metric,json=queryMetric,proto3" json:"query_metric,omitempty"`
-	// Type known while building the index ("histogram" for collapsed histograms), empty otherwise.
-	Type          string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	// "counter" | "gauge" | "histogram" | "stat_value" | "unknown". The name alone gives "histogram"
+	// (collapsed histograms) and "counter" (a _total suffix); any other metric is "unknown" until
+	// metric-types has inferred its type from its data (METRIC_FLAG_ZERO_CHECKED).
+	Type string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	// MetricFlag bits.
+	BitFlags      uint64 `protobuf:"varint,5,opt,name=bit_flags,json=bitFlags,proto3" json:"bit_flags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1036,16 +1097,24 @@ func (x *MetricInfo) GetType() string {
 	return ""
 }
 
+func (x *MetricInfo) GetBitFlags() uint64 {
+	if x != nil {
+		return x.BitFlags
+	}
+	return 0
+}
+
 type MetricIndexResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Schema        *SchemaVersion         `protobuf:"bytes,1,opt,name=schema,proto3" json:"schema,omitempty"`
-	Meta          *ResponseMeta          `protobuf:"bytes,2,opt,name=meta,proto3" json:"meta,omitempty"`
-	Metrics       []*MetricInfo          `protobuf:"bytes,3,rep,name=metrics,proto3" json:"metrics,omitempty"`
-	Groups        []*MetricGroup         `protobuf:"bytes,4,rep,name=groups,proto3" json:"groups,omitempty"` // only filled in prefix mode
-	TotalCount    uint32                 `protobuf:"varint,5,opt,name=total_count,json=totalCount,proto3" json:"total_count,omitempty"`
-	Page          uint32                 `protobuf:"varint,6,opt,name=page,proto3" json:"page,omitempty"`
-	PageSize      uint32                 `protobuf:"varint,7,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	TotalPages    uint32                 `protobuf:"varint,8,opt,name=total_pages,json=totalPages,proto3" json:"total_pages,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Schema  *SchemaVersion         `protobuf:"bytes,1,opt,name=schema,proto3" json:"schema,omitempty"`
+	Meta    *ResponseMeta          `protobuf:"bytes,2,opt,name=meta,proto3" json:"meta,omitempty"`
+	Metrics []*MetricInfo          `protobuf:"bytes,3,rep,name=metrics,proto3" json:"metrics,omitempty"`
+	// Only filled in prefix mode; with a group set, that group is the only one.
+	Groups        []*MetricGroup `protobuf:"bytes,4,rep,name=groups,proto3" json:"groups,omitempty"`
+	TotalCount    uint32         `protobuf:"varint,5,opt,name=total_count,json=totalCount,proto3" json:"total_count,omitempty"`
+	Page          uint32         `protobuf:"varint,6,opt,name=page,proto3" json:"page,omitempty"`
+	PageSize      uint32         `protobuf:"varint,7,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	TotalPages    uint32         `protobuf:"varint,8,opt,name=total_pages,json=totalPages,proto3" json:"total_pages,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1139,9 +1208,15 @@ func (x *MetricIndexResponse) GetTotalPages() uint32 {
 type MetricTypesRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Metrics []string               `protobuf:"bytes,1,rep,name=metrics,proto3" json:"metrics,omitempty"`
-	// Only chooses the window used to look up sibling names for histogram detection; the data used
-	// to infer counter/gauge/stat value is always the last hour.
+	// With group, pod_group and node: the metric-index request the names were listed by. Its cached
+	// list tells the histograms apart, and the types inferred here are written back to it, so the
+	// next metric-index answer already carries them. Without that list, histograms are detected from
+	// the metric names in the range. The data used to infer counter/gauge/stat value is always the
+	// last hour.
 	Range         *TimeRange `protobuf:"bytes,2,opt,name=range,proto3" json:"range,omitempty"`
+	Group         string     `protobuf:"bytes,3,opt,name=group,proto3" json:"group,omitempty"` // the prefix group, in prefix mode
+	PodGroup      string     `protobuf:"bytes,4,opt,name=pod_group,json=podGroup,proto3" json:"pod_group,omitempty"`
+	Node          string     `protobuf:"bytes,5,opt,name=node,proto3" json:"node,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1188,6 +1263,27 @@ func (x *MetricTypesRequest) GetRange() *TimeRange {
 		return x.Range
 	}
 	return nil
+}
+
+func (x *MetricTypesRequest) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
+}
+
+func (x *MetricTypesRequest) GetPodGroup() string {
+	if x != nil {
+		return x.PodGroup
+	}
+	return ""
+}
+
+func (x *MetricTypesRequest) GetNode() string {
+	if x != nil {
+		return x.Node
+	}
+	return ""
 }
 
 type MetricTypesResponse struct {
@@ -3641,13 +3737,14 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	" \x01(\tR\x04node\"7\n" +
 	"\vMetricGroup\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\rR\x05count\"m\n" +
+	"\x05count\x18\x02 \x01(\rR\x05count\"\x8a\x01\n" +
 	"\n" +
 	"MetricInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05group\x18\x02 \x01(\tR\x05group\x12!\n" +
 	"\fquery_metric\x18\x03 \x01(\tR\vqueryMetric\x12\x12\n" +
-	"\x04type\x18\x04 \x01(\tR\x04type\"\xc4\x02\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1b\n" +
+	"\tbit_flags\x18\x05 \x01(\x04R\bbitFlags\"\xc4\x02\n" +
 	"\x13MetricIndexResponse\x12/\n" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12.\n" +
@@ -3658,10 +3755,13 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\x04page\x18\x06 \x01(\rR\x04page\x12\x1b\n" +
 	"\tpage_size\x18\a \x01(\rR\bpageSize\x12\x1f\n" +
 	"\vtotal_pages\x18\b \x01(\rR\n" +
-	"totalPages\"Y\n" +
+	"totalPages\"\xa0\x01\n" +
 	"\x12MetricTypesRequest\x12\x18\n" +
 	"\ametrics\x18\x01 \x03(\tR\ametrics\x12)\n" +
-	"\x05range\x18\x02 \x01(\v2\x13.explorer.TimeRangeR\x05range\"\x93\x03\n" +
+	"\x05range\x18\x02 \x01(\v2\x13.explorer.TimeRangeR\x05range\x12\x14\n" +
+	"\x05group\x18\x03 \x01(\tR\x05group\x12\x1b\n" +
+	"\tpod_group\x18\x04 \x01(\tR\bpodGroup\x12\x12\n" +
+	"\x04node\x18\x05 \x01(\tR\x04node\"\x93\x03\n" +
 	"\x13MetricTypesResponse\x12/\n" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12>\n" +
@@ -3894,7 +3994,13 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\tGroupMode\x12\x1a\n" +
 	"\x16GROUP_MODE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eGROUP_MODE_ALL\x10\x01\x12\x15\n" +
-	"\x11GROUP_MODE_PREFIX\x10\x02BLZJgithub.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer;explorerpbb\x06proto3"
+	"\x11GROUP_MODE_PREFIX\x10\x02*~\n" +
+	"\n" +
+	"MetricFlag\x12\x1b\n" +
+	"\x17METRIC_FLAG_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18METRIC_FLAG_ZERO_CHECKED\x10\x01\x12\x14\n" +
+	"\x10METRIC_FLAG_ZERO\x10\x02\x12\x1f\n" +
+	"\x1bMETRIC_FLAG_HISTOGRAM_COUNT\x10\x04BLZJgithub.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer;explorerpbb\x06proto3"
 
 var (
 	file_explorer_explorer_proto_rawDescOnce sync.Once
@@ -3908,128 +4014,129 @@ func file_explorer_explorer_proto_rawDescGZIP() []byte {
 	return file_explorer_explorer_proto_rawDescData
 }
 
-var file_explorer_explorer_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_explorer_explorer_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_explorer_explorer_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
 var file_explorer_explorer_proto_goTypes = []any{
 	(RangePrecision)(0),          // 0: explorer.RangePrecision
 	(GroupMode)(0),               // 1: explorer.GroupMode
-	(*SchemaVersion)(nil),        // 2: explorer.SchemaVersion
-	(*TimeRange)(nil),            // 3: explorer.TimeRange
-	(*ResponseMeta)(nil),         // 4: explorer.ResponseMeta
-	(*Error)(nil),                // 5: explorer.Error
-	(*LabelFilter)(nil),          // 6: explorer.LabelFilter
-	(*DatasourceInfo)(nil),       // 7: explorer.DatasourceInfo
-	(*DatasourcesResponse)(nil),  // 8: explorer.DatasourcesResponse
-	(*LabelMapping)(nil),         // 9: explorer.LabelMapping
-	(*CapabilitiesResponse)(nil), // 10: explorer.CapabilitiesResponse
-	(*MetricIndexRequest)(nil),   // 11: explorer.MetricIndexRequest
-	(*MetricGroup)(nil),          // 12: explorer.MetricGroup
-	(*MetricInfo)(nil),           // 13: explorer.MetricInfo
-	(*MetricIndexResponse)(nil),  // 14: explorer.MetricIndexResponse
-	(*MetricTypesRequest)(nil),   // 15: explorer.MetricTypesRequest
-	(*MetricTypesResponse)(nil),  // 16: explorer.MetricTypesResponse
-	(*PodGroupsRequest)(nil),     // 17: explorer.PodGroupsRequest
-	(*PodGroup)(nil),             // 18: explorer.PodGroup
-	(*PodGroupsResponse)(nil),    // 19: explorer.PodGroupsResponse
-	(*NodeGroupsRequest)(nil),    // 20: explorer.NodeGroupsRequest
-	(*NodeGroupsResponse)(nil),   // 21: explorer.NodeGroupsResponse
-	(*FacetsRequest)(nil),        // 22: explorer.FacetsRequest
-	(*FacetValue)(nil),           // 23: explorer.FacetValue
-	(*Facet)(nil),                // 24: explorer.Facet
-	(*FacetsResponse)(nil),       // 25: explorer.FacetsResponse
-	(*SeriesRequest)(nil),        // 26: explorer.SeriesRequest
-	(*Series)(nil),               // 27: explorer.Series
-	(*SeriesResponse)(nil),       // 28: explorer.SeriesResponse
-	(*MetadataRequest)(nil),      // 29: explorer.MetadataRequest
-	(*MetricMetadata)(nil),       // 30: explorer.MetricMetadata
-	(*MetadataResponse)(nil),     // 31: explorer.MetadataResponse
-	(*ChartPlanRequest)(nil),     // 32: explorer.ChartPlanRequest
-	(*ChartPlan)(nil),            // 33: explorer.ChartPlan
-	(*ChartSummary)(nil),         // 34: explorer.ChartSummary
-	(*HistogramTableRow)(nil),    // 35: explorer.HistogramTableRow
-	(*HistogramTable)(nil),       // 36: explorer.HistogramTable
-	(*StatTableRow)(nil),         // 37: explorer.StatTableRow
-	(*StatTable)(nil),            // 38: explorer.StatTable
-	(*ChartPlanResponse)(nil),    // 39: explorer.ChartPlanResponse
-	(*RangeQueryRequest)(nil),    // 40: explorer.RangeQueryRequest
-	(*TimeSeries)(nil),           // 41: explorer.TimeSeries
-	(*RangeQueryResponse)(nil),   // 42: explorer.RangeQueryResponse
-	(*DiagnosticsResponse)(nil),  // 43: explorer.DiagnosticsResponse
-	(*CacheStatsResponse)(nil),   // 44: explorer.CacheStatsResponse
-	(*CachePurgeRequest)(nil),    // 45: explorer.CachePurgeRequest
-	(*CachePurgeResponse)(nil),   // 46: explorer.CachePurgeResponse
-	nil,                          // 47: explorer.Error.DetailsEntry
-	nil,                          // 48: explorer.MetricTypesResponse.TypesEntry
-	nil,                          // 49: explorer.MetricTypesResponse.ZeroValuesEntry
-	nil,                          // 50: explorer.Series.LabelsEntry
-	nil,                          // 51: explorer.StatTableRow.LabelsEntry
-	nil,                          // 52: explorer.TimeSeries.LabelsEntry
-	nil,                          // 53: explorer.DiagnosticsResponse.ErrorCountsEntry
+	(MetricFlag)(0),              // 2: explorer.MetricFlag
+	(*SchemaVersion)(nil),        // 3: explorer.SchemaVersion
+	(*TimeRange)(nil),            // 4: explorer.TimeRange
+	(*ResponseMeta)(nil),         // 5: explorer.ResponseMeta
+	(*Error)(nil),                // 6: explorer.Error
+	(*LabelFilter)(nil),          // 7: explorer.LabelFilter
+	(*DatasourceInfo)(nil),       // 8: explorer.DatasourceInfo
+	(*DatasourcesResponse)(nil),  // 9: explorer.DatasourcesResponse
+	(*LabelMapping)(nil),         // 10: explorer.LabelMapping
+	(*CapabilitiesResponse)(nil), // 11: explorer.CapabilitiesResponse
+	(*MetricIndexRequest)(nil),   // 12: explorer.MetricIndexRequest
+	(*MetricGroup)(nil),          // 13: explorer.MetricGroup
+	(*MetricInfo)(nil),           // 14: explorer.MetricInfo
+	(*MetricIndexResponse)(nil),  // 15: explorer.MetricIndexResponse
+	(*MetricTypesRequest)(nil),   // 16: explorer.MetricTypesRequest
+	(*MetricTypesResponse)(nil),  // 17: explorer.MetricTypesResponse
+	(*PodGroupsRequest)(nil),     // 18: explorer.PodGroupsRequest
+	(*PodGroup)(nil),             // 19: explorer.PodGroup
+	(*PodGroupsResponse)(nil),    // 20: explorer.PodGroupsResponse
+	(*NodeGroupsRequest)(nil),    // 21: explorer.NodeGroupsRequest
+	(*NodeGroupsResponse)(nil),   // 22: explorer.NodeGroupsResponse
+	(*FacetsRequest)(nil),        // 23: explorer.FacetsRequest
+	(*FacetValue)(nil),           // 24: explorer.FacetValue
+	(*Facet)(nil),                // 25: explorer.Facet
+	(*FacetsResponse)(nil),       // 26: explorer.FacetsResponse
+	(*SeriesRequest)(nil),        // 27: explorer.SeriesRequest
+	(*Series)(nil),               // 28: explorer.Series
+	(*SeriesResponse)(nil),       // 29: explorer.SeriesResponse
+	(*MetadataRequest)(nil),      // 30: explorer.MetadataRequest
+	(*MetricMetadata)(nil),       // 31: explorer.MetricMetadata
+	(*MetadataResponse)(nil),     // 32: explorer.MetadataResponse
+	(*ChartPlanRequest)(nil),     // 33: explorer.ChartPlanRequest
+	(*ChartPlan)(nil),            // 34: explorer.ChartPlan
+	(*ChartSummary)(nil),         // 35: explorer.ChartSummary
+	(*HistogramTableRow)(nil),    // 36: explorer.HistogramTableRow
+	(*HistogramTable)(nil),       // 37: explorer.HistogramTable
+	(*StatTableRow)(nil),         // 38: explorer.StatTableRow
+	(*StatTable)(nil),            // 39: explorer.StatTable
+	(*ChartPlanResponse)(nil),    // 40: explorer.ChartPlanResponse
+	(*RangeQueryRequest)(nil),    // 41: explorer.RangeQueryRequest
+	(*TimeSeries)(nil),           // 42: explorer.TimeSeries
+	(*RangeQueryResponse)(nil),   // 43: explorer.RangeQueryResponse
+	(*DiagnosticsResponse)(nil),  // 44: explorer.DiagnosticsResponse
+	(*CacheStatsResponse)(nil),   // 45: explorer.CacheStatsResponse
+	(*CachePurgeRequest)(nil),    // 46: explorer.CachePurgeRequest
+	(*CachePurgeResponse)(nil),   // 47: explorer.CachePurgeResponse
+	nil,                          // 48: explorer.Error.DetailsEntry
+	nil,                          // 49: explorer.MetricTypesResponse.TypesEntry
+	nil,                          // 50: explorer.MetricTypesResponse.ZeroValuesEntry
+	nil,                          // 51: explorer.Series.LabelsEntry
+	nil,                          // 52: explorer.StatTableRow.LabelsEntry
+	nil,                          // 53: explorer.TimeSeries.LabelsEntry
+	nil,                          // 54: explorer.DiagnosticsResponse.ErrorCountsEntry
 }
 var file_explorer_explorer_proto_depIdxs = []int32{
-	3,  // 0: explorer.ResponseMeta.requested_range:type_name -> explorer.TimeRange
-	3,  // 1: explorer.ResponseMeta.effective_range:type_name -> explorer.TimeRange
+	4,  // 0: explorer.ResponseMeta.requested_range:type_name -> explorer.TimeRange
+	4,  // 1: explorer.ResponseMeta.effective_range:type_name -> explorer.TimeRange
 	0,  // 2: explorer.ResponseMeta.range_precision:type_name -> explorer.RangePrecision
-	47, // 3: explorer.Error.details:type_name -> explorer.Error.DetailsEntry
-	7,  // 4: explorer.DatasourcesResponse.datasources:type_name -> explorer.DatasourceInfo
-	2,  // 5: explorer.CapabilitiesResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 6: explorer.CapabilitiesResponse.meta:type_name -> explorer.ResponseMeta
-	9,  // 7: explorer.CapabilitiesResponse.label_mappings:type_name -> explorer.LabelMapping
-	3,  // 8: explorer.MetricIndexRequest.range:type_name -> explorer.TimeRange
+	48, // 3: explorer.Error.details:type_name -> explorer.Error.DetailsEntry
+	8,  // 4: explorer.DatasourcesResponse.datasources:type_name -> explorer.DatasourceInfo
+	3,  // 5: explorer.CapabilitiesResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 6: explorer.CapabilitiesResponse.meta:type_name -> explorer.ResponseMeta
+	10, // 7: explorer.CapabilitiesResponse.label_mappings:type_name -> explorer.LabelMapping
+	4,  // 8: explorer.MetricIndexRequest.range:type_name -> explorer.TimeRange
 	1,  // 9: explorer.MetricIndexRequest.group_mode:type_name -> explorer.GroupMode
-	2,  // 10: explorer.MetricIndexResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 11: explorer.MetricIndexResponse.meta:type_name -> explorer.ResponseMeta
-	13, // 12: explorer.MetricIndexResponse.metrics:type_name -> explorer.MetricInfo
-	12, // 13: explorer.MetricIndexResponse.groups:type_name -> explorer.MetricGroup
-	3,  // 14: explorer.MetricTypesRequest.range:type_name -> explorer.TimeRange
-	2,  // 15: explorer.MetricTypesResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 16: explorer.MetricTypesResponse.meta:type_name -> explorer.ResponseMeta
-	48, // 17: explorer.MetricTypesResponse.types:type_name -> explorer.MetricTypesResponse.TypesEntry
-	49, // 18: explorer.MetricTypesResponse.zero_values:type_name -> explorer.MetricTypesResponse.ZeroValuesEntry
-	3,  // 19: explorer.PodGroupsRequest.range:type_name -> explorer.TimeRange
-	2,  // 20: explorer.PodGroupsResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 21: explorer.PodGroupsResponse.meta:type_name -> explorer.ResponseMeta
-	18, // 22: explorer.PodGroupsResponse.groups:type_name -> explorer.PodGroup
-	3,  // 23: explorer.NodeGroupsRequest.range:type_name -> explorer.TimeRange
-	2,  // 24: explorer.NodeGroupsResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 25: explorer.NodeGroupsResponse.meta:type_name -> explorer.ResponseMeta
-	6,  // 26: explorer.FacetsRequest.filters:type_name -> explorer.LabelFilter
-	3,  // 27: explorer.FacetsRequest.range:type_name -> explorer.TimeRange
-	23, // 28: explorer.Facet.values:type_name -> explorer.FacetValue
-	2,  // 29: explorer.FacetsResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 30: explorer.FacetsResponse.meta:type_name -> explorer.ResponseMeta
-	24, // 31: explorer.FacetsResponse.facets:type_name -> explorer.Facet
-	3,  // 32: explorer.SeriesRequest.range:type_name -> explorer.TimeRange
-	50, // 33: explorer.Series.labels:type_name -> explorer.Series.LabelsEntry
-	2,  // 34: explorer.SeriesResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 35: explorer.SeriesResponse.meta:type_name -> explorer.ResponseMeta
-	27, // 36: explorer.SeriesResponse.series:type_name -> explorer.Series
-	2,  // 37: explorer.MetadataResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 38: explorer.MetadataResponse.meta:type_name -> explorer.ResponseMeta
-	30, // 39: explorer.MetadataResponse.items:type_name -> explorer.MetricMetadata
-	6,  // 40: explorer.ChartPlanRequest.filters:type_name -> explorer.LabelFilter
-	3,  // 41: explorer.ChartPlanRequest.range:type_name -> explorer.TimeRange
-	35, // 42: explorer.HistogramTable.rows:type_name -> explorer.HistogramTableRow
-	51, // 43: explorer.StatTableRow.labels:type_name -> explorer.StatTableRow.LabelsEntry
-	37, // 44: explorer.StatTable.rows:type_name -> explorer.StatTableRow
-	2,  // 45: explorer.ChartPlanResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 46: explorer.ChartPlanResponse.meta:type_name -> explorer.ResponseMeta
-	33, // 47: explorer.ChartPlanResponse.plan:type_name -> explorer.ChartPlan
-	34, // 48: explorer.ChartPlanResponse.summary:type_name -> explorer.ChartSummary
-	36, // 49: explorer.ChartPlanResponse.histogram_table:type_name -> explorer.HistogramTable
-	38, // 50: explorer.ChartPlanResponse.stat_table:type_name -> explorer.StatTable
-	3,  // 51: explorer.RangeQueryRequest.range:type_name -> explorer.TimeRange
-	52, // 52: explorer.TimeSeries.labels:type_name -> explorer.TimeSeries.LabelsEntry
-	2,  // 53: explorer.RangeQueryResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 54: explorer.RangeQueryResponse.meta:type_name -> explorer.ResponseMeta
-	41, // 55: explorer.RangeQueryResponse.series:type_name -> explorer.TimeSeries
-	2,  // 56: explorer.DiagnosticsResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 57: explorer.DiagnosticsResponse.meta:type_name -> explorer.ResponseMeta
-	53, // 58: explorer.DiagnosticsResponse.error_counts:type_name -> explorer.DiagnosticsResponse.ErrorCountsEntry
-	2,  // 59: explorer.CacheStatsResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 60: explorer.CacheStatsResponse.meta:type_name -> explorer.ResponseMeta
-	2,  // 61: explorer.CachePurgeResponse.schema:type_name -> explorer.SchemaVersion
-	4,  // 62: explorer.CachePurgeResponse.meta:type_name -> explorer.ResponseMeta
+	3,  // 10: explorer.MetricIndexResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 11: explorer.MetricIndexResponse.meta:type_name -> explorer.ResponseMeta
+	14, // 12: explorer.MetricIndexResponse.metrics:type_name -> explorer.MetricInfo
+	13, // 13: explorer.MetricIndexResponse.groups:type_name -> explorer.MetricGroup
+	4,  // 14: explorer.MetricTypesRequest.range:type_name -> explorer.TimeRange
+	3,  // 15: explorer.MetricTypesResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 16: explorer.MetricTypesResponse.meta:type_name -> explorer.ResponseMeta
+	49, // 17: explorer.MetricTypesResponse.types:type_name -> explorer.MetricTypesResponse.TypesEntry
+	50, // 18: explorer.MetricTypesResponse.zero_values:type_name -> explorer.MetricTypesResponse.ZeroValuesEntry
+	4,  // 19: explorer.PodGroupsRequest.range:type_name -> explorer.TimeRange
+	3,  // 20: explorer.PodGroupsResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 21: explorer.PodGroupsResponse.meta:type_name -> explorer.ResponseMeta
+	19, // 22: explorer.PodGroupsResponse.groups:type_name -> explorer.PodGroup
+	4,  // 23: explorer.NodeGroupsRequest.range:type_name -> explorer.TimeRange
+	3,  // 24: explorer.NodeGroupsResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 25: explorer.NodeGroupsResponse.meta:type_name -> explorer.ResponseMeta
+	7,  // 26: explorer.FacetsRequest.filters:type_name -> explorer.LabelFilter
+	4,  // 27: explorer.FacetsRequest.range:type_name -> explorer.TimeRange
+	24, // 28: explorer.Facet.values:type_name -> explorer.FacetValue
+	3,  // 29: explorer.FacetsResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 30: explorer.FacetsResponse.meta:type_name -> explorer.ResponseMeta
+	25, // 31: explorer.FacetsResponse.facets:type_name -> explorer.Facet
+	4,  // 32: explorer.SeriesRequest.range:type_name -> explorer.TimeRange
+	51, // 33: explorer.Series.labels:type_name -> explorer.Series.LabelsEntry
+	3,  // 34: explorer.SeriesResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 35: explorer.SeriesResponse.meta:type_name -> explorer.ResponseMeta
+	28, // 36: explorer.SeriesResponse.series:type_name -> explorer.Series
+	3,  // 37: explorer.MetadataResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 38: explorer.MetadataResponse.meta:type_name -> explorer.ResponseMeta
+	31, // 39: explorer.MetadataResponse.items:type_name -> explorer.MetricMetadata
+	7,  // 40: explorer.ChartPlanRequest.filters:type_name -> explorer.LabelFilter
+	4,  // 41: explorer.ChartPlanRequest.range:type_name -> explorer.TimeRange
+	36, // 42: explorer.HistogramTable.rows:type_name -> explorer.HistogramTableRow
+	52, // 43: explorer.StatTableRow.labels:type_name -> explorer.StatTableRow.LabelsEntry
+	38, // 44: explorer.StatTable.rows:type_name -> explorer.StatTableRow
+	3,  // 45: explorer.ChartPlanResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 46: explorer.ChartPlanResponse.meta:type_name -> explorer.ResponseMeta
+	34, // 47: explorer.ChartPlanResponse.plan:type_name -> explorer.ChartPlan
+	35, // 48: explorer.ChartPlanResponse.summary:type_name -> explorer.ChartSummary
+	37, // 49: explorer.ChartPlanResponse.histogram_table:type_name -> explorer.HistogramTable
+	39, // 50: explorer.ChartPlanResponse.stat_table:type_name -> explorer.StatTable
+	4,  // 51: explorer.RangeQueryRequest.range:type_name -> explorer.TimeRange
+	53, // 52: explorer.TimeSeries.labels:type_name -> explorer.TimeSeries.LabelsEntry
+	3,  // 53: explorer.RangeQueryResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 54: explorer.RangeQueryResponse.meta:type_name -> explorer.ResponseMeta
+	42, // 55: explorer.RangeQueryResponse.series:type_name -> explorer.TimeSeries
+	3,  // 56: explorer.DiagnosticsResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 57: explorer.DiagnosticsResponse.meta:type_name -> explorer.ResponseMeta
+	54, // 58: explorer.DiagnosticsResponse.error_counts:type_name -> explorer.DiagnosticsResponse.ErrorCountsEntry
+	3,  // 59: explorer.CacheStatsResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 60: explorer.CacheStatsResponse.meta:type_name -> explorer.ResponseMeta
+	3,  // 61: explorer.CachePurgeResponse.schema:type_name -> explorer.SchemaVersion
+	5,  // 62: explorer.CachePurgeResponse.meta:type_name -> explorer.ResponseMeta
 	63, // [63:63] is the sub-list for method output_type
 	63, // [63:63] is the sub-list for method input_type
 	63, // [63:63] is the sub-list for extension type_name
@@ -4048,7 +4155,7 @@ func file_explorer_explorer_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_explorer_explorer_proto_rawDesc), len(file_explorer_explorer_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   52,
 			NumExtensions: 0,
 			NumServices:   0,

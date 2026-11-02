@@ -192,18 +192,19 @@ func (r *registry) fingerprint(orgID int64, info *datasourceInfo) string {
 func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target, error) {
 	obs := observability.New(info.UID)
 	client, err := vmclient.New(vmclient.Config{
-		UID:               info.UID,
-		DatasourceType:    info.Type,
-		OrgID:             orgID,
-		ConfigFingerprint: fp,
-		Credentials:       r.creds,
-		PodLabel:          r.settings.PodLabel,
-		NamespaceLabel:    r.settings.NamespaceLabel,
-		NodeLabel:         r.settings.NodeLabel,
-		ClusterLabel:      r.settings.ClusterLabel,
-		DefaultTimeRange:  r.settings.DefaultTimeRange,
-		CacheTTL:          r.settings.CacheTTL,
-		Timeout:           r.settings.UpstreamTimeout,
+		UID:                 info.UID,
+		DatasourceType:      info.Type,
+		OrgID:               orgID,
+		ConfigFingerprint:   fp,
+		Credentials:         r.creds,
+		PodLabel:            r.settings.PodLabel,
+		NamespaceLabel:      r.settings.NamespaceLabel,
+		NodeLabel:           r.settings.NodeLabel,
+		ClusterLabel:        r.settings.ClusterLabel,
+		DefaultTimeRange:    r.settings.DefaultTimeRange,
+		CacheTTL:            r.settings.CacheTTL,
+		MetricIndexCacheTTL: r.settings.MetricIndexCacheTTL,
+		Timeout:             r.settings.UpstreamTimeout,
 	}, r.lim, obs)
 	if err != nil {
 		obs.Close()

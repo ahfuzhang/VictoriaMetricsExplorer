@@ -52,6 +52,7 @@ func Encode(msg proto.Message) ([]byte, error) {
 }
 
 // Decode reverses Encode into msg. An empty body leaves msg at its defaults.
+// todo: 写得太麻烦了
 func Decode(body []byte, msg proto.Message) error {
 	proto.Reset(msg)
 	if len(body) == 0 {

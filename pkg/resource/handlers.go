@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
@@ -23,8 +24,9 @@ import (
 
 const (
 	capabilitiesCacheTTL = 5 * time.Minute
-	// metricIndexCacheTTL is short because metric names can change.
-	metricIndexCacheTTL = 2 * time.Minute
+	// DefaultMetricIndexCacheTTL is how long metric-index lists and inferred metric types are
+	// cached when the app configures no metricIndexCacheTTL.
+	DefaultMetricIndexCacheTTL = 30 * time.Minute
 )
 
 // Handlers contains all the Resource API endpoint handlers.
@@ -32,6 +34,9 @@ type Handlers struct {
 	router *Router
 	// typeSem bounds the range queries metric-types has in flight against the datasource.
 	typeSem chan struct{}
+	// indexMu serializes metric-types' updates of cached metric-index lists, so concurrent
+	// updates of one list never drop each other's results.
+	indexMu sync.Mutex
 }
 
 // NewHandlers creates a new Handlers instance.
@@ -179,81 +184,186 @@ func (h *Handlers) detectLabelMappings(ctx context.Context) ([]*explorerpb.Label
 // Metric Index
 // ============================================================================
 
-// metricIndexEntry is one row in the metric picker. Name is exactly what the UI displays;
-// QueryMetric is the real metric used by facets and charts. A classic Prometheus histogram is
-// represented by its bucket metric (its _count without buckets) for queries, but Name omits the
-// suffix. Aliases keep searches and favorite lookups for any of the original three member names
-// working.
-type metricIndexEntry struct {
-	Name        string
-	QueryMetric string
-	MetricType  string
-	Aliases     []string
-}
+// Bits of MetricInfo.BitFlags.
+const (
+	metricFlagZeroChecked    = uint64(explorerpb.MetricFlag_METRIC_FLAG_ZERO_CHECKED)
+	metricFlagZero           = uint64(explorerpb.MetricFlag_METRIC_FLAG_ZERO)
+	metricFlagHistogramCount = uint64(explorerpb.MetricFlag_METRIC_FLAG_HISTOGRAM_COUNT)
+)
 
-func buildMetricIndexEntries(names []string) []metricIndexEntry {
+// buildMetricIndex turns metric names into metric picker rows sorted by name. Name is exactly what
+// the UI displays; QueryMetric is the real metric used by facets and charts. A classic Prometheus
+// histogram is represented by its bucket metric (its _count without buckets) for queries, but Name
+// omits the suffix. Type is what the name tells (histogram, or counter for a _total suffix) and
+// unknown otherwise, until metric-types has looked at the data.
+func buildMetricIndex(names []string) []*explorerpb.MetricInfo {
 	known := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		known[name] = struct{}{}
 	}
 
-	entries := make([]metricIndexEntry, 0, len(names))
+	// One allocation holds every row; histograms collapse, so some of it stays unused.
+	rows := make([]explorerpb.MetricInfo, len(names))
+	metrics := make([]*explorerpb.MetricInfo, 0, len(names))
 	seenHistograms := make(map[string]struct{})
 	for _, name := range names {
+		m := &rows[len(metrics)]
 		base, hasHistogramSuffix := histogramMetricBase(name)
 		if hasHistogramSuffix && isHistogramMember(name, known) {
 			if _, seen := seenHistograms[base]; seen {
 				continue
 			}
 			seenHistograms[base] = struct{}{}
-			bucket, count, sum := histogramMemberNames(base)
+			bucket, count, _ := histogramMemberNames(base)
+			m.Name, m.QueryMetric, m.Type = base, bucket, metricTypeHistogram
 			// A histogram without buckets is queried through its _count.
-			queryMetric := bucket
 			if _, hasBucket := known[bucket]; !hasBucket {
-				queryMetric = count
+				m.QueryMetric = count
 			}
-			entries = append(entries, metricIndexEntry{
-				Name:        base,
-				QueryMetric: queryMetric,
-				MetricType:  metricTypeHistogram,
-				Aliases:     []string{base, bucket, count, sum},
-			})
+			if _, hasCount := known[count]; hasCount {
+				m.BitFlags = metricFlagHistogramCount
+			}
+			metrics = append(metrics, m)
 			continue
 		}
 
-		entries = append(entries, metricIndexEntry{
-			Name:        name,
-			QueryMetric: name,
-			Aliases:     []string{name},
-		})
+		m.Name, m.QueryMetric, m.Type = name, name, metricTypeUnknown
+		if t, ok := metricTypeFromName(name); ok {
+			m.Type = t
+		}
+		metrics = append(metrics, m)
 	}
-	return entries
+	sort.Slice(metrics, func(i, j int) bool {
+		if metrics[i].Name == metrics[j].Name {
+			return metrics[i].QueryMetric < metrics[j].QueryMetric
+		}
+		return metrics[i].Name < metrics[j].Name
+	})
+	return metrics
 }
 
-func filterMetricIndexEntries(entries []metricIndexEntry, metricNames []string) []metricIndexEntry {
-	wanted := make(map[string]struct{}, len(metricNames))
-	for _, name := range metricNames {
-		wanted[name] = struct{}{}
+// appendMetricAliases appends the names a metric picker row answers to in searches and favorite
+// lookups: its name, or for a collapsed histogram (whose name is not its query metric) the base and
+// all three member names.
+func appendMetricAliases(dst []string, m *explorerpb.MetricInfo) []string {
+	if m.Name == m.QueryMetric {
+		return append(dst, m.Name)
 	}
-	filtered := entries[:0]
-	for _, entry := range entries {
-		for _, alias := range entry.Aliases {
-			if _, ok := wanted[alias]; ok {
-				filtered = append(filtered, entry)
-				break
-			}
+	bucket, count, sum := histogramMemberNames(m.Name)
+	return append(dst, m.Name, bucket, count, sum)
+}
+
+// filterMetricIndex keeps, in place, the rows with an alias keep reports true for.
+func filterMetricIndex(metrics []*explorerpb.MetricInfo, keep func(alias string) bool) []*explorerpb.MetricInfo {
+	aliases := make([]string, 0, 4)
+	filtered := metrics[:0]
+	for _, m := range metrics {
+		aliases = appendMetricAliases(aliases[:0], m)
+		if slices.ContainsFunc(aliases, keep) {
+			filtered = append(filtered, m)
 		}
 	}
 	return filtered
 }
 
-func metricIndexEntryMatches(entry metricIndexEntry, searchLower string) bool {
-	for _, alias := range entry.Aliases {
-		if strings.Contains(strings.ToLower(alias), searchLower) {
-			return true
+// metricsInGroup keeps, in place, the rows of one prefix group.
+func metricsInGroup(metrics []*explorerpb.MetricInfo, group string) []*explorerpb.MetricInfo {
+	filtered := metrics[:0]
+	for _, m := range metrics {
+		if getPrefixGroup(m.Name) == group {
+			filtered = append(filtered, m)
 		}
 	}
-	return false
+	return filtered
+}
+
+// setMetricType records a result of metric-types on a metric picker row. A type the name decided
+// stays.
+func setMetricType(m *explorerpb.MetricInfo, result metricTypeResult) {
+	if m.Type == metricTypeUnknown || m.Type == "" {
+		m.Type = result.Type
+	}
+	m.BitFlags = m.BitFlags&^metricFlagZero | metricFlagZeroChecked
+	if result.Zero {
+		m.BitFlags |= metricFlagZero
+	}
+}
+
+// dayRange widens a range to whole UTC days, the granularity of the label values API.
+func dayRange(start, end time.Time) (time.Time, time.Time) {
+	return start.Truncate(24 * time.Hour), end.Truncate(24 * time.Hour).Add(24 * time.Hour)
+}
+
+func (h *Handlers) metricIndexCacheTTL() time.Duration {
+	if ttl := h.router.config.MetricIndexCacheTTL; ttl > 0 {
+		return ttl
+	}
+	return DefaultMetricIndexCacheTTL
+}
+
+// metricIndexListKey is the cache key of the metric-index list of one scope and day-aligned range.
+// The scopes come in three kinds: the metrics of a name prefix (group; "" is every metric), of a
+// pod group and of a node.
+func (h *Handlers) metricIndexListKey(group, podGroup, node string, dayStart, dayEnd time.Time) string {
+	cfg := &h.router.config
+	b := make([]byte, 0, cache.KeySize("metric-index-v5", cfg.UID, cfg.ConfigFingerprint, group, podGroup, node)+
+		2*cache.MaxIntKeySize)
+	b = cache.AppendKey(b, "metric-index-v5", cfg.UID, cfg.ConfigFingerprint, group, podGroup, node)
+	b = cache.AppendKeyInt(b, dayStart.Unix())
+	return cache.HashKey(cache.AppendKeyInt(b, dayEnd.Unix()))
+}
+
+// metricIndexList returns the metric-index list of one scope (see metricIndexListKey) for the
+// day-aligned range, and whether it came from the cache. A prefix group is cut from the scope's
+// whole list when that is cached; otherwise the scope's metric names are fetched, and the whole
+// list is cached as well, for the scope's other groups.
+func (h *Handlers) metricIndexList(ctx context.Context, group, podGroup, node string, dayStart, dayEnd time.Time) (*explorerpb.MetricIndexCacheEntry, bool, error) {
+	ttl := h.metricIndexCacheTTL()
+	key := h.metricIndexListKey(group, podGroup, node, dayStart, dayEnd)
+	var list explorerpb.MetricIndexCacheEntry
+	if h.router.cache.Get(key, ttl, &list) {
+		return &list, true, nil
+	}
+
+	var wholeKey string
+	if group != "" {
+		wholeKey = h.metricIndexListKey("", podGroup, node, dayStart, dayEnd)
+		// The group keeps the whole list's write time, so it expires with the names it was cut from.
+		if writtenAt, ok := h.router.cache.GetWritten(wholeKey, ttl, &list); ok {
+			list.Metrics = metricsInGroup(list.Metrics, group)
+			h.router.cache.SetWritten(key, &list, writtenAt)
+			return &list, true, nil
+		}
+	}
+
+	var matches []string
+	if selector := labelSelector(h.podGroupMatcher(podGroup), h.nodeMatcher(node)); selector != "" {
+		matches = []string{selector}
+	}
+	names, isPartial, err := h.router.client.LabelValues(ctx, "__name__", matches, dayStart, dayEnd, h.router.limits.MaxMetricNamesHard)
+	if err != nil {
+		return nil, false, err
+	}
+	list.Metrics, list.Partial = buildMetricIndex(names), isPartial
+	if group != "" {
+		h.router.cache.Set(wholeKey, &list)
+		list.Metrics = metricsInGroup(list.Metrics, group)
+	}
+	h.router.cache.Set(key, &list)
+	return &list, false, nil
+}
+
+// fillCachedMetricTypes completes the rows metric-types has not looked at in their list from the
+// per-metric type cache, which metric-types fills whatever list a metric was shown in.
+func (h *Handlers) fillCachedMetricTypes(metrics []*explorerpb.MetricInfo) {
+	for _, m := range metrics {
+		if m.BitFlags&metricFlagZeroChecked != 0 {
+			continue
+		}
+		if cached, ok := h.cachedMetricType(m.QueryMetric); ok {
+			setMetricType(m, cached)
+		}
+	}
 }
 
 func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
@@ -281,70 +391,59 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startTime, endTime := h.timeRange(req.Range)
-
-	// Check cache
-	cacheKey := h.metricIndexCacheKey(&req, prefixMode, startTime, endTime)
-	if cached, ok := h.router.cache.GetZstd(cacheKey, metricIndexCacheTTL); ok {
-		h.router.obs.RecordCacheHit()
-		wire.Write(w, http.StatusOK, cached)
-		return
-	}
-	h.router.obs.RecordCacheMiss()
-
-	// Fetch metric names from upstream
 	// Use day-granularity time range for label values API
-	dayStart := startTime.Truncate(24 * time.Hour)
-	dayEnd := endTime.Truncate(24 * time.Hour).Add(24 * time.Hour)
+	dayStart, dayEnd := dayRange(startTime, endTime)
 
-	var matches []string
-	if selector := labelSelector(h.podGroupMatcher(req.PodGroup), h.nodeMatcher(req.Node)); selector != "" {
-		matches = []string{selector}
+	// The scope's list comes from the cache when it can; searching, sorting and paging work on it.
+	group := ""
+	if prefixMode {
+		group = req.Group
 	}
-
-	names, isPartial, err := h.router.client.LabelValues(r.Context(), "__name__", matches, dayStart, dayEnd, h.router.limits.MaxMetricNamesHard)
+	list, cacheHit, err := h.metricIndexList(r.Context(), group, req.PodGroup, req.Node, dayStart, dayEnd)
 	if err != nil {
 		log.DefaultLogger.Error("metric-index: failed to fetch names", "error", err, "requestId", requestID)
 		h.router.obs.RecordError("upstream_error")
 		writeError(w, http.StatusBadGateway, "upstream_error", "failed to fetch metric names: "+err.Error(), requestID)
 		return
 	}
-	entries := buildMetricIndexEntries(names)
+	if cacheHit {
+		h.router.obs.RecordCacheHit()
+	} else {
+		h.router.obs.RecordCacheMiss()
+	}
+	isPartial := list.Partial
+
+	entries := list.Metrics
 	if len(req.Metrics) > 0 {
-		entries = filterMetricIndexEntries(entries, req.Metrics)
+		wanted := make(map[string]struct{}, len(req.Metrics))
+		for _, name := range req.Metrics {
+			wanted[name] = struct{}{}
+		}
+		entries = filterMetricIndex(entries, func(alias string) bool {
+			_, ok := wanted[alias]
+			return ok
+		})
 	}
 
 	// Apply search filter
 	if req.Search != "" {
 		searchLower := strings.ToLower(req.Search)
-		filtered := entries[:0]
-		for _, entry := range entries {
-			if metricIndexEntryMatches(entry, searchLower) {
-				filtered = append(filtered, entry)
-			}
-		}
-		entries = filtered
+		entries = filterMetricIndex(entries, func(alias string) bool {
+			return strings.Contains(strings.ToLower(alias), searchLower)
+		})
 	}
 
-	// Sort
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Name == entries[j].Name {
-			return entries[i].QueryMetric < entries[j].QueryMetric
-		}
-		return entries[i].Name < entries[j].Name
-	})
+	// The list is sorted by name.
 	if req.Sort == "name_desc" {
-		for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-			entries[i], entries[j] = entries[j], entries[i]
-		}
+		slices.Reverse(entries)
 	}
 
-	// Build groups if prefix mode
+	// Build groups if prefix mode; the list of a group holds only that group.
 	var groups []*explorerpb.MetricGroup
 	if prefixMode {
 		groupMap := make(map[string]uint32)
 		for _, entry := range entries {
-			group := getPrefixGroup(entry.Name)
-			groupMap[group]++
+			groupMap[getPrefixGroup(entry.Name)]++
 		}
 		groups = make([]*explorerpb.MetricGroup, 0, len(groupMap))
 		for name, count := range groupMap {
@@ -353,17 +452,6 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(groups, func(i, j int) bool {
 			return groups[i].Name < groups[j].Name
 		})
-	}
-
-	// Filter by group if specified
-	if req.Group != "" && prefixMode {
-		filtered := entries[:0]
-		for _, entry := range entries {
-			if getPrefixGroup(entry.Name) == req.Group {
-				filtered = append(filtered, entry)
-			}
-		}
-		entries = filtered
 	}
 
 	totalCount := len(entries)
@@ -380,28 +468,18 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	startIdx := (page - 1) * pageSize
 	endIdx := startIdx + pageSize
-	if startIdx >= totalCount {
-		entries = []metricIndexEntry{}
-	} else {
-		if endIdx > totalCount {
-			endIdx = totalCount
-		}
-		entries = entries[startIdx:endIdx]
+	var metrics []*explorerpb.MetricInfo
+	if startIdx < totalCount {
+		metrics = entries[startIdx:min(endIdx, totalCount)]
 	}
 
 	// Build response
-	metrics := make([]*explorerpb.MetricInfo, 0, len(entries))
-	for _, entry := range entries {
-		m := &explorerpb.MetricInfo{
-			Name:        entry.Name,
-			QueryMetric: entry.QueryMetric,
-			Type:        entry.MetricType,
+	if prefixMode {
+		for _, m := range metrics {
+			m.Group = getPrefixGroup(m.Name)
 		}
-		if prefixMode {
-			m.Group = getPrefixGroup(entry.Name)
-		}
-		metrics = append(metrics, m)
 	}
+	h.fillCachedMetricTypes(metrics)
 
 	resp := &explorerpb.MetricIndexResponse{
 		Schema: schemaV1(),
@@ -410,6 +488,7 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 			RangePrecision: explorerpb.RangePrecision_RANGE_PRECISION_DAY,
 			Truncated:      truncated,
 			Partial:        isPartial,
+			CacheHit:       cacheHit,
 			ElapsedMs:      uint64(time.Since(started).Milliseconds()),
 			TotalCount:     uint32(totalCount),
 			ReturnedCount:  uint32(len(metrics)),
@@ -431,14 +510,6 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 		h.router.obs.RecordTruncation()
 	}
 
-	data, err := wire.Encode(resp)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "marshal_error", "failed to encode response: "+err.Error(), requestID)
-		return
-	}
-
-	h.router.cache.Set(cacheKey, resp)
-
 	log.DefaultLogger.Info("metric-index",
 		"uid", h.router.config.UID,
 		"requestId", requestID,
@@ -446,31 +517,12 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 		"returned", len(metrics),
 		"page", req.Page,
 		"elapsedMs", time.Since(started).Milliseconds(),
+		"cacheHit", cacheHit,
 		"truncated", truncated,
 		"partial", isPartial,
 	)
 
-	wire.Write(w, http.StatusOK, data)
-}
-
-// metricIndexCacheKey is the cache key of a metric-index request. It sorts req.Metrics, whose
-// order does not matter.
-func (h *Handlers) metricIndexCacheKey(req *explorerpb.MetricIndexRequest, prefixMode bool, start, end time.Time) string {
-	cfg := &h.router.config
-	sort.Strings(req.Metrics)
-	b := make([]byte, 0, cache.KeySize("metric-index-v4", cfg.UID, cfg.ConfigFingerprint, req.Search, req.Group,
-		req.PodGroup, req.Node, req.Sort)+cache.MaxBoolKeySize+2*cache.MaxUintKeySize+2*cache.MaxIntKeySize+
-		cache.KeySize(req.Metrics...))
-	b = cache.AppendKey(b, "metric-index-v4", cfg.UID, cfg.ConfigFingerprint, req.Search, req.Group, req.PodGroup,
-		req.Node, req.Sort)
-	b = cache.AppendKeyBool(b, prefixMode)
-	b = cache.AppendKeyUint(b, uint64(req.Page))
-	b = cache.AppendKeyUint(b, uint64(req.PageSize))
-	b = cache.AppendKeyInt(b, start.Unix())
-	b = cache.AppendKeyInt(b, end.Unix())
-	// The list of metrics goes last, so it needs no count to keep it apart from the fields after it.
-	b = cache.AppendKey(b, req.Metrics...)
-	return cache.HashKey(b)
+	writeMessage(w, resp, requestID)
 }
 
 // getPrefixGroup extracts the prefix group from a metric name.

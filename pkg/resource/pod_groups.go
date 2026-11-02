@@ -19,6 +19,8 @@ const (
 	// k8sRandomAlphabet is the alphabet Kubernetes uses for generated name suffixes (ReplicaSet
 	// pod-template hashes and the random pod suffix): no vowels and no 0, 1 or 3.
 	k8sRandomAlphabet = "bcdfghjklmnpqrstvwxz2456789"
+	// gitLabRunnerGroup is the pod group of every GitLab Runner job pod.
+	gitLabRunnerGroup = "runner"
 )
 
 // podGroupEntry is one workload: the pods whose names share a prefix once generated suffixes are
@@ -32,8 +34,12 @@ type podGroupEntry struct {
 // podPrefix returns the workload part of a pod name by removing generated trailing segments, e.g.
 // "mahjong-ways-7d4f8c9b7-k8pnx" -> "mahjong-ways" and "mahjong-ways2-5c6b8d9f4-xq2zr" ->
 // "mahjong-ways2". Segments are only removed from the end, and the first segment is always kept,
-// so names that merely contain digits ("ways2", "worker10") stay distinct workloads.
+// so names that merely contain digits ("ways2", "worker10") stay distinct workloads. GitLab Runner
+// job pods all go to "runner".
 func podPrefix(pod string) string {
+	if isGitLabRunnerPod(pod) {
+		return gitLabRunnerGroup
+	}
 	end := len(pod)
 	for {
 		i := strings.LastIndexByte(pod[:end], '-')
@@ -42,6 +48,27 @@ func podPrefix(pod string) string {
 		}
 		end = i
 	}
+}
+
+// isGitLabRunnerPod reports whether pod is a job pod of the GitLab Runner Kubernetes executor,
+// named runner-<token>-project-<project id>-concurrent-<n>-<random>. The token and the project id
+// are not generated per pod, so trimming trailing segments would leave one group per runner and
+// project. The token may itself contain '-'.
+func isGitLabRunnerPod(pod string) bool {
+	rest, ok := strings.CutPrefix(pod, "runner-")
+	if !ok {
+		return false
+	}
+	i := strings.Index(rest, "-project-")
+	if i <= 0 {
+		return false
+	}
+	rest = rest[i+len("-project-"):]
+	n := 0
+	for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
+		n++
+	}
+	return n > 0 && (n == len(rest) || rest[n] == '-')
 }
 
 // isGeneratedPodSegment reports whether one '-'-separated segment of a pod name looks generated
@@ -161,8 +188,8 @@ func (h *Handlers) loadPodGroups(ctx context.Context, startTime, endTime time.Ti
 	label := h.podLabel()
 
 	cfg := &h.router.config
-	key := make([]byte, 0, cache.KeySize("pod-groups-v2", cfg.UID, cfg.ConfigFingerprint, label)+2*cache.MaxIntKeySize)
-	key = cache.AppendKey(key, "pod-groups-v2", cfg.UID, cfg.ConfigFingerprint, label)
+	key := make([]byte, 0, cache.KeySize("pod-groups-v3", cfg.UID, cfg.ConfigFingerprint, label)+2*cache.MaxIntKeySize)
+	key = cache.AppendKey(key, "pod-groups-v3", cfg.UID, cfg.ConfigFingerprint, label)
 	key = cache.AppendKeyInt(key, dayStart.Unix())
 	cacheKey := cache.HashKey(cache.AppendKeyInt(key, dayEnd.Unix()))
 	var cached explorerpb.PodGroupsCacheEntry

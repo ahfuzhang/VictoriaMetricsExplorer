@@ -31,6 +31,14 @@ message NodeGroupsCacheEntry {
   bool partial = 3;
 }
 
+// MetricIndexCacheEntry is the metric-index list of one scope for one day-aligned range: every
+// metric of a name prefix (all of them for an empty prefix), of a pod group or of a node, sorted
+// by name, without groups. metric-types writes the types and flags it infers back into it.
+message MetricIndexCacheEntry {
+  repeated MetricInfo metrics = 1;
+  bool partial = 2;
+}
+
 // MetricTypeCacheEntry is the inferred type of one metric.
 message MetricTypeCacheEntry {
   string type = 1;   // counter, gauge, histogram, stat_value

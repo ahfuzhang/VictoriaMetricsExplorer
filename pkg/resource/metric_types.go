@@ -30,8 +30,7 @@ const (
 	// metricTypeWindow is how much data is pulled per metric to infer its type.
 	metricTypeWindow = time.Hour
 	// metricTypeStep gives one sample per minute, i.e. about 60 points per series.
-	metricTypeStep     = "1m"
-	metricTypeCacheTTL = 5 * time.Minute
+	metricTypeStep = "1m"
 	// metricTypeMaxNames bounds one request; the UI sends one page of metric names at a time.
 	metricTypeMaxNames = 500
 	// metricTypeConcurrency bounds the upstream range queries in flight for one datasource.
@@ -57,19 +56,50 @@ func (h *Handlers) handleMetricTypes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	types := make(map[string]string, len(names))
-	pending := names
-	zeroValues := make(map[string]bool)
+	// The range and scope name the metric-index list the names come from; the data used to infer
+	// counter/gauge/stat value is always the last hour.
+	startTime, endTime := h.timeRange(req.Range)
+	dayStart, dayEnd := dayRange(startTime, endTime)
+	listKey := h.metricIndexListKey(req.Group, req.PodGroup, req.Node, dayStart, dayEnd)
+	var list explorerpb.MetricIndexCacheEntry
+	haveList := h.router.cache.Get(listKey, h.metricIndexCacheTTL(), &list)
+	listed := make(map[string]*explorerpb.MetricInfo, len(list.Metrics))
+	for _, m := range list.Metrics {
+		listed[m.QueryMetric] = m
+	}
 
-	// A metric that belongs to a histogram is a histogram, whatever its samples look like, so the
-	// sibling lookup comes first and those names never need their data pulled.
-	if anyHistogramSuffix(names) {
-		// The range only chooses the window used to look up sibling names for histogram
-		// detection; the data used to infer counter/gauge/stat value is always the last hour.
-		startTime, endTime := h.timeRange(req.Range)
-		dayStart := startTime.Truncate(24 * time.Hour)
-		dayEnd := endTime.Truncate(24 * time.Hour).Add(24 * time.Hour)
-
+	results := make(map[string]metricTypeResult, len(names))
+	// A metric that belongs to a histogram is a histogram, whatever its samples look like, so those
+	// names never need their data pulled: only whether they saw observations is checked, on the
+	// counter each one maps to.
+	histogramCounters := make(map[string]string)
+	pending := make([]string, 0, len(names))
+	// Names the list does not have that may belong to a histogram; their sibling names decide.
+	var unlisted []string
+	for _, name := range names {
+		m, ok := listed[name]
+		switch {
+		case !ok:
+			if _, hasSuffix := histogramMetricBase(name); hasSuffix {
+				unlisted = append(unlisted, name)
+			} else {
+				pending = append(pending, name)
+			}
+		case m.BitFlags&metricFlagZeroChecked != 0:
+			// Looked at before: the list has the answer.
+			results[name] = metricTypeResult{Type: m.Type, Zero: m.BitFlags&metricFlagZero != 0, Checked: true}
+		case m.Name != m.QueryMetric:
+			// A collapsed histogram; without a _count, the buckets themselves are checked.
+			if m.BitFlags&metricFlagHistogramCount != 0 {
+				histogramCounters[name] = m.Name + "_count"
+			} else {
+				histogramCounters[name] = m.QueryMetric
+			}
+		default:
+			pending = append(pending, name)
+		}
+	}
+	if len(unlisted) > 0 {
 		all, _, err := h.router.client.LabelValues(r.Context(), "__name__", nil, dayStart, dayEnd, h.router.limits.MaxMetricNamesHard)
 		if err != nil {
 			log.DefaultLogger.Error("metric-types: failed to fetch names", "error", err, "requestId", requestID)
@@ -81,27 +111,42 @@ func (h *Handlers) handleMetricTypes(w http.ResponseWriter, r *http.Request) {
 		for _, n := range all {
 			known[n] = struct{}{}
 		}
-
-		pending = make([]string, 0, len(names))
-		var histograms []string
-		for _, name := range names {
-			if isHistogramMember(name, known) {
-				types[name] = metricTypeHistogram
-				histograms = append(histograms, name)
-			} else {
+		for _, name := range unlisted {
+			if !isHistogramMember(name, known) {
 				pending = append(pending, name)
+				continue
 			}
+			base, _ := histogramMetricBase(name)
+			counter := base + "_count"
+			if _, ok := known[counter]; !ok {
+				counter = base + "_bucket"
+			}
+			histogramCounters[name] = counter
 		}
-		h.markZeroHistograms(r.Context(), histograms, known, zeroValues)
 	}
 
-	failed := h.inferMetricTypes(r.Context(), pending, types, zeroValues)
+	h.markZeroHistograms(r.Context(), histogramCounters, results)
+	failed := h.inferMetricTypes(r.Context(), pending, results)
+	if haveList {
+		h.updateMetricIndexList(listKey, results)
+	}
+
+	types := make(map[string]string, len(results))
+	zeroValues := make(map[string]bool)
+	for name, result := range results {
+		types[name] = result.Type
+		if result.Zero {
+			zeroValues[name] = true
+		}
+	}
 
 	log.DefaultLogger.Info("metric-types",
 		"uid", h.router.config.UID,
 		"requestId", requestID,
 		"requested", len(names),
 		"queried", len(pending),
+		"histograms", len(histogramCounters),
+		"listed", haveList,
 		"failed", failed,
 		"elapsedMs", time.Since(started).Milliseconds(),
 	)
@@ -120,16 +165,19 @@ func (h *Handlers) handleMetricTypes(w http.ResponseWriter, r *http.Request) {
 }
 
 // metricTypeResult is the inferred type of one metric. Zero marks a metric whose samples in the
-// window are all 0.
+// window are all 0. Checked means the metric's data was looked at, so Type is final and Zero
+// known; it is false when the query failed, or for a type its name gives when the zero check
+// failed.
 type metricTypeResult struct {
-	Type string
-	Zero bool
+	Type    string
+	Zero    bool
+	Checked bool
 }
 
-// inferMetricTypes fills types (and zeroValues, for stat values that are always 0) for names from
-// their last hour of data and returns how many queries failed. Results are cached per metric; a
-// failed query yields metricTypeUnknown, which is not cached so the next request retries it.
-func (h *Handlers) inferMetricTypes(ctx context.Context, names []string, types map[string]string, zeroValues map[string]bool) int {
+// inferMetricTypes fills results for names from their last hour of data and returns how many
+// queries failed. Checked results are cached per metric; a failed query yields metricTypeUnknown,
+// which is not cached so the next request retries it.
+func (h *Handlers) inferMetricTypes(ctx context.Context, names []string, results map[string]metricTypeResult) int {
 	var (
 		mu     sync.Mutex
 		wg     sync.WaitGroup
@@ -144,10 +192,10 @@ func (h *Handlers) inferMetricTypes(ctx context.Context, names []string, types m
 	for _, name := range names {
 		if cached, ok := h.cachedMetricType(name); ok {
 			h.router.obs.RecordCacheHit()
-			types[name] = cached.Type
-			if cached.Zero {
-				zeroValues[name] = true
-			}
+			// Queries started for earlier names write results too.
+			mu.Lock()
+			results[name] = cached
+			mu.Unlock()
 			continue
 		}
 		h.router.obs.RecordCacheMiss()
@@ -162,7 +210,7 @@ func (h *Handlers) inferMetricTypes(ctx context.Context, names []string, types m
 				defer func() { <-h.typeSem }()
 			case <-ctx.Done():
 				mu.Lock()
-				types[name] = metricTypeUnknown
+				results[name] = metricTypeResult{Type: metricTypeUnknown}
 				failed++
 				mu.Unlock()
 				return
@@ -172,17 +220,14 @@ func (h *Handlers) inferMetricTypes(ctx context.Context, names []string, types m
 			if err != nil {
 				log.DefaultLogger.Debug("metric-types: could not infer type", "error", err, "metric", name)
 				mu.Lock()
-				types[name] = metricTypeUnknown
+				results[name] = metricTypeResult{Type: metricTypeUnknown}
 				failed++
 				mu.Unlock()
 				return
 			}
 			h.cacheMetricType(name, t)
 			mu.Lock()
-			types[name] = t.Type
-			if t.Zero {
-				zeroValues[name] = true
-			}
+			results[name] = t
 			mu.Unlock()
 		})
 	}
@@ -195,60 +240,73 @@ func (h *Handlers) inferMetricTypes(ctx context.Context, names []string, types m
 			log.DefaultLogger.Debug("metric-types: zero counter check failed", "error", err)
 		}
 		for _, name := range namedCounters {
-			types[name] = metricTypeCounter
-			if err != nil {
-				continue
+			result := metricTypeResult{Type: metricTypeCounter}
+			if err == nil {
+				result.Zero, result.Checked = zeroCounters[name], true
+				h.cacheMetricType(name, result)
 			}
-			result := metricTypeResult{Type: metricTypeCounter, Zero: zeroCounters[name]}
-			h.cacheMetricType(name, result)
-			if result.Zero {
-				zeroValues[name] = true
-			}
+			results[name] = result
 		}
 	}
 	return failed
 }
 
-// markZeroHistograms marks the histograms without observations in the last hour: their
-// <base>_count is always 0, or, for histograms that only export buckets, every bucket is.
-func (h *Handlers) markZeroHistograms(ctx context.Context, names []string, known map[string]struct{}, zeroValues map[string]bool) {
-	counterOf := make(map[string]string, len(names)) // histogram member -> counter that is checked
-	var counters []string
-	for _, name := range names {
+// markZeroHistograms fills results for histogram members and marks the ones without observations
+// in the last hour. counters maps each member to the counter that tells: its <base>_count, which is
+// always 0 then, or, for histograms that only export buckets, its _bucket, all of which are.
+func (h *Handlers) markZeroHistograms(ctx context.Context, counters map[string]string, results map[string]metricTypeResult) {
+	pending := make([]string, 0, len(counters))
+	for name, counter := range counters {
 		if cached, ok := h.cachedMetricType(name); ok && cached.Type == metricTypeHistogram {
 			h.router.obs.RecordCacheHit()
-			if cached.Zero {
-				zeroValues[name] = true
-			}
+			results[name] = cached
 			continue
 		}
 		h.router.obs.RecordCacheMiss()
-		base, _ := histogramMetricBase(name)
-		counter := base + "_count"
-		if _, ok := known[counter]; !ok {
-			counter = base + "_bucket"
-		}
-		if _, seen := counterOf[name]; !seen {
-			counterOf[name] = counter
-			counters = append(counters, counter)
-		}
+		results[name] = metricTypeResult{Type: metricTypeHistogram}
+		pending = append(pending, counter)
 	}
-	if len(counters) == 0 {
+	if len(pending) == 0 {
 		return
 	}
 
-	zeroCounters, err := h.zeroCounters(ctx, uniqueNonEmpty(counters), now())
+	zeroCounters, err := h.zeroCounters(ctx, uniqueNonEmpty(pending), now())
 	if err != nil {
 		// The histogram type stands without the zero check; it is retried with the next request.
 		log.DefaultLogger.Debug("metric-types: zero histogram check failed", "error", err)
 		return
 	}
-	for name, counter := range counterOf {
-		result := metricTypeResult{Type: metricTypeHistogram, Zero: zeroCounters[counter]}
-		h.cacheMetricType(name, result)
-		if result.Zero {
-			zeroValues[name] = true
+	for name, counter := range counters {
+		if results[name].Checked {
+			continue
 		}
+		result := metricTypeResult{Type: metricTypeHistogram, Zero: zeroCounters[counter], Checked: true}
+		h.cacheMetricType(name, result)
+		results[name] = result
+	}
+}
+
+// updateMetricIndexList writes the checked results into the metric-index list cached under key,
+// so the next metric-index answer carries them. The list keeps its write time: it still expires
+// with the metric names it was built from.
+func (h *Handlers) updateMetricIndexList(key string, results map[string]metricTypeResult) {
+	h.indexMu.Lock()
+	defer h.indexMu.Unlock()
+
+	var list explorerpb.MetricIndexCacheEntry
+	writtenAt, ok := h.router.cache.GetWritten(key, h.metricIndexCacheTTL(), &list)
+	if !ok {
+		return
+	}
+	updated := false
+	for _, m := range list.Metrics {
+		if result, ok := results[m.QueryMetric]; ok && result.Checked && m.BitFlags&metricFlagZeroChecked == 0 {
+			setMetricType(m, result)
+			updated = true
+		}
+	}
+	if updated {
+		h.router.cache.SetWritten(key, &list, writtenAt)
 	}
 }
 
@@ -304,16 +362,22 @@ func zeroCounterQuery(names []string, metricsQL bool) string {
 	return strings.Join(queries, " or on (__name__) ")
 }
 
+// cachedMetricType returns the checked result cached for one metric. Types are kept as long as
+// metric-index lists, so a type shown in the picker and the chart's type agree.
 func (h *Handlers) cachedMetricType(name string) (metricTypeResult, bool) {
 	cacheKey := cache.CacheKey("metric-type-v2", h.router.config.UID, h.router.config.ConfigFingerprint, name)
 	var entry explorerpb.MetricTypeCacheEntry
-	if !h.router.cache.Get(cacheKey, metricTypeCacheTTL, &entry) || entry.Type == "" {
+	if !h.router.cache.Get(cacheKey, h.metricIndexCacheTTL(), &entry) || entry.Type == "" {
 		return metricTypeResult{}, false
 	}
-	return metricTypeResult{Type: entry.Type, Zero: entry.Zero}, true
+	return metricTypeResult{Type: entry.Type, Zero: entry.Zero, Checked: true}, true
 }
 
+// cacheMetricType caches a checked result; others are left for the next request to retry.
 func (h *Handlers) cacheMetricType(name string, result metricTypeResult) {
+	if !result.Checked {
+		return
+	}
 	cacheKey := cache.CacheKey("metric-type-v2", h.router.config.UID, h.router.config.ConfigFingerprint, name)
 	h.router.cache.Set(cacheKey, &explorerpb.MetricTypeCacheEntry{Type: result.Type, Zero: result.Zero})
 }
@@ -362,7 +426,7 @@ func (h *Handlers) inferMetricType(ctx context.Context, name string, start, end 
 	if err != nil {
 		return metricTypeResult{Type: metricTypeUnknown}, err
 	}
-	return metricTypeResult{Type: t, Zero: allSamplesZero(data)}, nil
+	return metricTypeResult{Type: t, Zero: allSamplesZero(data), Checked: true}, nil
 }
 
 // allSamplesZero reports whether a query_range result has samples and every one of them is 0.
@@ -499,17 +563,6 @@ func histogramMemberNames(base string) (bucket, count, sum string) {
 	b = append(append(b, base...), "_sum"...)
 	names := bytesutil.ToUnsafeString(b)
 	return names[:bucketEnd], names[bucketEnd:countEnd], names[countEnd:]
-}
-
-func anyHistogramSuffix(names []string) bool {
-	for _, name := range names {
-		for _, suffix := range histogramSuffixes {
-			if strings.HasSuffix(name, suffix) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // isHistogramMember reports whether name is one of the metrics of a histogram: "<base>_bucket",

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -136,8 +137,8 @@ func TestIsHistogramMemberNeedsAllThreeMetrics(t *testing.T) {
 	}
 }
 
-func TestBuildMetricIndexEntriesCollapsesHistogramMembers(t *testing.T) {
-	entries := buildMetricIndexEntries([]string{
+func TestBuildMetricIndexCollapsesHistogramMembers(t *testing.T) {
+	entries := buildMetricIndex([]string{
 		"rpc_duration_seconds_sum",
 		"up",
 		"rpc_duration_seconds_bucket",
@@ -145,62 +146,75 @@ func TestBuildMetricIndexEntriesCollapsesHistogramMembers(t *testing.T) {
 		"rpc_duration_seconds_count",
 		"summary_seconds_sum",
 		"go_gc_pauses_seconds_bucket",
+		"requests_total",
 	})
 
-	if len(entries) != 4 {
-		t.Fatalf("expected three histograms plus one ordinary metric, got %#v", entries)
+	// Sorted by name; the name alone types histograms and _total counters.
+	want := []struct {
+		name, queryMetric, typ string
+		flags                  uint64
+	}{
+		{"go_gc_pauses_seconds", "go_gc_pauses_seconds_bucket", metricTypeHistogram, 0},
+		{"requests_total", "requests_total", metricTypeCounter, 0},
+		{"rpc_duration_seconds", "rpc_duration_seconds_bucket", metricTypeHistogram, metricFlagHistogramCount},
+		// A bucketless _count/_sum pair collapses to its base name and is queried through _count.
+		{"summary_seconds", "summary_seconds_count", metricTypeHistogram, metricFlagHistogramCount},
+		{"up", "up", metricTypeUnknown, 0},
 	}
-	for _, entry := range entries {
-		if entry.Name == "summary_seconds_count" || entry.Name == "summary_seconds_sum" ||
-			(entry.Name == "summary_seconds" &&
-				(entry.MetricType != metricTypeHistogram || entry.QueryMetric != "summary_seconds_count")) {
-			t.Fatalf("a bucketless _count/_sum pair must collapse to its base name: %#v", entry)
+	if len(entries) != len(want) {
+		t.Fatalf("expected %d rows, got %v", len(want), entries)
+	}
+	for i, w := range want {
+		e := entries[i]
+		if e.Name != w.name || e.QueryMetric != w.queryMetric || e.Type != w.typ || e.BitFlags != w.flags {
+			t.Errorf("row %d = %v, want %+v", i, e, w)
 		}
 	}
-	for _, entry := range entries {
-		if entry.Name == "go_gc_pauses_seconds_bucket" ||
-			(entry.Name == "go_gc_pauses_seconds" && entry.QueryMetric != "go_gc_pauses_seconds_bucket") {
-			t.Fatalf("a bucket-only histogram must collapse to its base name: %#v", entry)
-		}
-	}
-	var histogram *metricIndexEntry
-	for i := range entries {
-		if entries[i].MetricType == metricTypeHistogram {
-			histogram = &entries[i]
-			break
-		}
-	}
-	if histogram == nil {
-		t.Fatal("expected a collapsed histogram entry")
-	}
-	if histogram.Name != "rpc_duration_seconds" || histogram.QueryMetric != "rpc_duration_seconds_bucket" {
-		t.Fatalf("unexpected histogram entry: %#v", histogram)
-	}
+
+	histogram := entries[2]
 	for _, search := range []string{"rpc_duration_seconds", "_bucket", "_count", "_sum"} {
-		if !metricIndexEntryMatches(*histogram, search) {
+		matches := filterMetricIndex([]*explorerpb.MetricInfo{histogram}, func(alias string) bool {
+			return strings.Contains(alias, search)
+		})
+		if len(matches) != 1 {
 			t.Errorf("collapsed histogram should match search %q", search)
 		}
 	}
 
-	filtered := filterMetricIndexEntries(entries, []string{"rpc_duration_seconds_sum"})
+	filtered := filterMetricIndex(slices.Clone(entries), func(alias string) bool { return alias == "rpc_duration_seconds_sum" })
 	if len(filtered) != 1 || filtered[0].QueryMetric != "rpc_duration_seconds_bucket" {
-		t.Fatalf("a favorite histogram member must resolve to the collapsed bucket entry: %#v", filtered)
+		t.Fatalf("a favorite histogram member must resolve to the collapsed bucket entry: %v", filtered)
 	}
 }
 
+// upstreamCalls counts the requests a harness's fake datasource answered.
+type upstreamCalls struct {
+	labelValues  atomic.Int64
+	rangeQueries atomic.Int64
+	zeroChecks   atomic.Int64
+}
+
 // metricTypesHarness serves a fake datasource proxy: __name__ label values from names, and
-// query_range matrices from series, keyed by metric name.
+// query_range matrices from series, keyed by metric name. It returns the count of range queries.
 func metricTypesHarness(t *testing.T, names []string, series map[string]string, datasourceType ...string) (*Handlers, *atomic.Int64) {
 	t.Helper()
-	var rangeQueries atomic.Int64
+	h, calls := newHarness(t, names, series, datasourceType...)
+	return h, &calls.rangeQueries
+}
+
+// newHarness is metricTypesHarness returning every count.
+func newHarness(t *testing.T, names []string, series map[string]string, datasourceType ...string) (*Handlers, *upstreamCalls) {
+	t.Helper()
+	calls := &upstreamCalls{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		// Every label's values are the given names (metric names, or pod names for pod-groups).
 		case strings.Contains(r.URL.Path, "/api/v1/label/") && strings.HasSuffix(r.URL.Path, "/values"):
+			calls.labelValues.Add(1)
 			data, _ := json.Marshal(names)
 			_, _ = w.Write([]byte(`{"status":"success","data":` + string(data) + `}`))
 		case strings.HasSuffix(r.URL.Path, "/api/v1/query_range"):
-			rangeQueries.Add(1)
+			calls.rangeQueries.Add(1)
 			query := r.URL.Query().Get("query")
 			for name, values := range series {
 				if query == `{__name__="`+name+`"}` {
@@ -213,6 +227,7 @@ func metricTypesHarness(t *testing.T, names []string, series map[string]string, 
 			query := r.URL.Query().Get("query")
 			// The zero-counter check: report the maximum of every listed counter that has series.
 			if strings.HasPrefix(query, "max by (__name__) (max_over_time(") || strings.HasPrefix(query, "label_replace(max(max_over_time(") {
+				calls.zeroChecks.Add(1)
 				if len(datasourceType) > 0 && datasourceType[0] == vmclient.PrometheusDatasourceType && strings.Contains(query, "keep_metric_names") {
 					t.Error("Prometheus received a MetricsQL query")
 					http.Error(w, "unsupported query", http.StatusBadRequest)
@@ -266,7 +281,7 @@ func metricTypesHarness(t *testing.T, names []string, series map[string]string, 
 	c := cache.New(32 << 20)
 	t.Cleanup(c.Close)
 
-	return NewRouter(client, c.Scope(), lim, obs, cfg).handlers, &rangeQueries
+	return NewRouter(client, c.Scope(), lim, obs, cfg).handlers, calls
 }
 
 func TestHandleMetricIndexReturnsHistogramDisplayNameAndQueryMetric(t *testing.T) {
@@ -305,16 +320,156 @@ func TestHandleMetricIndexReturnsHistogramDisplayNameAndQueryMetric(t *testing.T
 	}
 }
 
+// postMetricIndex runs metric-index for req and returns the response.
+func postMetricIndex(t *testing.T, h *Handlers, req *explorerpb.MetricIndexRequest) *explorerpb.MetricIndexResponse {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.handleMetricIndex(rec, postProto(t, "/explorer/v1/metric-index", req))
+	expectOK(t, rec)
+	var resp explorerpb.MetricIndexResponse
+	decodeProto(t, rec.Body.Bytes(), &resp)
+	return &resp
+}
+
 // postMetricTypes runs metric-types for metrics and returns the status and the types.
 func postMetricTypes(t *testing.T, h *Handlers, metrics ...string) (int, *explorerpb.MetricTypesResponse) {
 	t.Helper()
+	return postMetricTypesRequest(t, h, &explorerpb.MetricTypesRequest{Metrics: metrics})
+}
+
+// postMetricTypesRequest runs metric-types for req and returns the status and the types.
+func postMetricTypesRequest(t *testing.T, h *Handlers, req *explorerpb.MetricTypesRequest) (int, *explorerpb.MetricTypesResponse) {
+	t.Helper()
 	rec := httptest.NewRecorder()
-	h.handleMetricTypes(rec, postProto(t, "/explorer/v1/metric-types", &explorerpb.MetricTypesRequest{Metrics: metrics}))
+	h.handleMetricTypes(rec, postProto(t, "/explorer/v1/metric-types", req))
 	var resp explorerpb.MetricTypesResponse
 	if rec.Code == http.StatusOK {
 		decodeProto(t, rec.Body.Bytes(), &resp)
 	}
 	return rec.Code, &resp
+}
+
+// fixedRange is a range inside one UTC day, so every request of a test names the same lists.
+var fixedRange = &explorerpb.TimeRange{StartMs: 1_700_000_000_000, EndMs: 1_700_003_600_000}
+
+func TestMetricIndexServesEveryRequestOfAScopeFromOneFetch(t *testing.T) {
+	h, calls := newHarness(t, []string{
+		"apisix_etcd_reachable", "apisix_http_requests_total",
+		"apisix_latency_seconds_bucket", "apisix_latency_seconds_count", "apisix_latency_seconds_sum",
+		"go_goroutines", "up",
+	}, nil)
+	index := func(req *explorerpb.MetricIndexRequest) *explorerpb.MetricIndexResponse {
+		req.GroupMode, req.Range = explorerpb.GroupMode_GROUP_MODE_PREFIX, fixedRange
+		return postMetricIndex(t, h, req)
+	}
+
+	first := index(&explorerpb.MetricIndexRequest{Page: 1, PageSize: 2})
+	if first.Meta.CacheHit || first.TotalCount != 5 || first.TotalPages != 3 || len(first.Metrics) != 2 {
+		t.Fatalf("unexpected first page: %v", first)
+	}
+	// Other pages, searches, orders and prefix groups are cut from the cached list.
+	second := index(&explorerpb.MetricIndexRequest{Page: 2, PageSize: 2})
+	if !second.Meta.CacheHit || second.Metrics[0].Name != "apisix_latency_seconds" || second.Metrics[1].Name != "go_goroutines" {
+		t.Fatalf("unexpected second page: %v", second)
+	}
+	if search := index(&explorerpb.MetricIndexRequest{Search: "LATENCY_SECONDS_SUM"}); search.TotalCount != 1 ||
+		search.Metrics[0].QueryMetric != "apisix_latency_seconds_bucket" {
+		t.Fatalf("a search for a histogram member must find the collapsed row: %v", search)
+	}
+	if desc := index(&explorerpb.MetricIndexRequest{Sort: "name_desc"}); desc.Metrics[0].Name != "up" {
+		t.Fatalf("name_desc must start with the last name: %v", desc)
+	}
+
+	group := index(&explorerpb.MetricIndexRequest{Group: "apisix"})
+	if !group.Meta.CacheHit || group.TotalCount != 3 || len(group.Groups) != 1 || group.Groups[0].Count != 3 {
+		t.Fatalf("unexpected group: %v", group)
+	}
+	wantTypes := map[string]string{
+		"apisix_etcd_reachable":      metricTypeUnknown,
+		"apisix_http_requests_total": metricTypeCounter,
+		"apisix_latency_seconds":     metricTypeHistogram,
+	}
+	for _, m := range group.Metrics {
+		if m.Group != "apisix" || m.Type != wantTypes[m.Name] || m.BitFlags&metricFlagZeroChecked != 0 {
+			t.Errorf("unexpected row %v", m)
+		}
+	}
+
+	if n := calls.labelValues.Load(); n != 1 {
+		t.Fatalf("expected one label values request for every request of the scope, got %d", n)
+	}
+}
+
+func TestMetricTypesWritesBackIntoTheMetricIndexList(t *testing.T) {
+	h, calls := newHarness(t, []string{
+		"apisix_etcd_reachable", "apisix_http_requests_total", "apisix_idle",
+		"apisix_latency_seconds_bucket", "apisix_latency_seconds_count", "apisix_latency_seconds_sum",
+		"apisix_go_gc_seconds_bucket", // a histogram without _count
+	}, map[string]string{
+		"apisix_etcd_reachable":        `{"metric":{},"values":[[1,"1"],[2,"0"],[3,"1"]]}`,
+		"apisix_http_requests_total":   `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
+		"apisix_latency_seconds_count": `{"metric":{},"values":[[1,"0"],[2,"0"]]}`,
+		"apisix_go_gc_seconds_bucket":  `{"metric":{},"values":[[1,"3"],[2,"5"]]}`,
+		// apisix_idle has no samples in the last hour.
+	})
+	indexReq := &explorerpb.MetricIndexRequest{GroupMode: explorerpb.GroupMode_GROUP_MODE_PREFIX, Group: "apisix", Range: fixedRange}
+
+	index := postMetricIndex(t, h, indexReq)
+	metrics := make([]string, 0, len(index.Metrics))
+	for _, m := range index.Metrics {
+		if m.BitFlags&metricFlagZeroChecked != 0 {
+			t.Fatalf("nothing was looked at yet: %v", m)
+		}
+		metrics = append(metrics, m.QueryMetric)
+	}
+	typesReq := &explorerpb.MetricTypesRequest{Metrics: metrics, Range: fixedRange, Group: "apisix"}
+	if code, _ := postMetricTypesRequest(t, h, typesReq); code != http.StatusOK {
+		t.Fatalf("status %d", code)
+	}
+	// The cached list tells the histograms apart: no second label values request.
+	if n := calls.labelValues.Load(); n != 1 {
+		t.Fatalf("expected the list's single label values request, got %d", n)
+	}
+	queried := calls.rangeQueries.Load() + calls.zeroChecks.Load()
+
+	type row struct {
+		typ  string
+		zero bool
+	}
+	want := map[string]row{
+		"apisix_etcd_reachable":      {metricTypeGauge, false},
+		"apisix_go_gc_seconds":       {metricTypeHistogram, false},
+		"apisix_http_requests_total": {metricTypeCounter, true},
+		"apisix_idle":                {metricTypeUnknown, false},
+		"apisix_latency_seconds":     {metricTypeHistogram, true},
+	}
+	again := postMetricIndex(t, h, indexReq)
+	if !again.Meta.CacheHit || len(again.Metrics) != len(want) {
+		t.Fatalf("unexpected list: %v", again)
+	}
+	for _, m := range again.Metrics {
+		w := want[m.Name]
+		if m.BitFlags&metricFlagZeroChecked == 0 || m.Type != w.typ || (m.BitFlags&metricFlagZero != 0) != w.zero {
+			t.Errorf("%s: got type %q flags %b, want %+v", m.Name, m.Type, m.BitFlags, w)
+		}
+	}
+
+	// Asking again about metrics the list has looked at costs nothing upstream.
+	if code, resp := postMetricTypesRequest(t, h, typesReq); code != http.StatusOK ||
+		resp.Types["apisix_etcd_reachable"] != metricTypeGauge || !resp.ZeroValues["apisix_latency_seconds_bucket"] {
+		t.Fatalf("status %d, %v", code, resp)
+	}
+	if n := calls.rangeQueries.Load() + calls.zeroChecks.Load(); n != queried {
+		t.Fatalf("expected no further queries, got %d more", n-queried)
+	}
+
+	// Another scope's new list is completed from the types inferred for this one.
+	pod := postMetricIndex(t, h, &explorerpb.MetricIndexRequest{PodGroup: "apisix", Range: fixedRange})
+	for _, m := range pod.Metrics {
+		if w := want[m.Name]; m.BitFlags&metricFlagZeroChecked == 0 || m.Type != w.typ {
+			t.Errorf("pod scope %s: got type %q flags %b, want %+v", m.Name, m.Type, m.BitFlags, w)
+		}
+	}
 }
 
 func TestHandleMetricTypes(t *testing.T) {

@@ -13,6 +13,7 @@ import {
   GroupMode,
   MetadataRequestSchema,
   MetadataResponseSchema,
+  MetricFlag,
   MetricIndexRequestSchema,
   MetricIndexResponseSchema,
   MetricTypesRequestSchema,
@@ -73,8 +74,15 @@ export interface MetricInfo {
   name: string;
   /** Real metric name used by facet and chart queries. */
   queryMetric: string;
-  /** Types known while building the index, currently used for collapsed histograms. */
-  type?: MetricKind;
+  /**
+   * 'histogram' and 'counter' (a _total suffix) when the name tells; any other metric is 'unknown'
+   * until the backend has looked at its data (zeroChecked).
+   */
+  type: MetricKind;
+  /** The backend has looked at the metric's data: type is final and zero is known. */
+  zeroChecked: boolean;
+  /** Every sample in the last hour is 0. */
+  zero: boolean;
   group?: string;
 }
 
@@ -439,7 +447,9 @@ export async function fetchMetricIndex(
     metrics: pb.metrics.map((m) => ({
       name: m.name,
       queryMetric: m.queryMetric,
-      type: (m.type || undefined) as MetricKind | undefined,
+      type: (m.type || 'unknown') as MetricKind,
+      zeroChecked: hasFlag(m.bitFlags, MetricFlag.ZERO_CHECKED),
+      zero: hasFlag(m.bitFlags, MetricFlag.ZERO),
       group: m.group || undefined,
     })),
     groups: pb.groups.map((g) => ({ name: g.name, count: g.count })),
@@ -448,6 +458,11 @@ export async function fetchMetricIndex(
     pageSize: pb.pageSize,
     totalPages: pb.totalPages,
   };
+}
+
+/** Whether a MetricInfo.bitFlags value has flag set. */
+function hasFlag(flags: bigint, flag: MetricFlag): boolean {
+  return (flags & BigInt(flag)) !== BigInt(0);
 }
 
 /**
@@ -510,12 +525,18 @@ export async function fetchNodeGroups(
 /**
  * Infer the type (counter, gauge, histogram, stat value) of the given metrics. The backend pulls
  * the last hour of each metric's data, so this is slower than the metric index and is requested
- * separately, once the names are already on screen.
+ * separately, once the names are already on screen, and only for the metrics the index has not
+ * looked at yet (MetricInfo.zeroChecked). The time range, group, podGroup and node name the
+ * metric-index request the metrics come from: the backend writes the types into its cached list,
+ * so the next metric index already carries them.
  */
 export async function fetchMetricTypes(
   uid: string,
   params: {
     metrics: string[];
+    group?: string;
+    podGroup?: string;
+    node?: string;
     startMs?: number;
     endMs?: number;
   }
@@ -526,7 +547,13 @@ export async function fetchMetricTypes(
     response: MetricTypesResponseSchema,
     request: {
       schema: MetricTypesRequestSchema,
-      init: { metrics: params.metrics, range: timeRange(params.startMs, params.endMs) },
+      init: {
+        metrics: params.metrics,
+        range: timeRange(params.startMs, params.endMs),
+        group: params.group,
+        podGroup: params.podGroup,
+        node: params.node,
+      },
     },
     showErrorAlert: false,
   });
