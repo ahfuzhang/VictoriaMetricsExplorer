@@ -12,6 +12,7 @@ import (
 
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/limits"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/metricconfig"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/observability"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
@@ -20,13 +21,17 @@ import (
 
 // Router routes Resource API requests to the appropriate handler.
 type Router struct {
-	client   *vmclient.Client
-	cache    *cache.Scope
-	limits   *limits.Limits
-	obs      *observability.Observability
-	config   vmclient.Config
-	handlers *Handlers
+	metricCatalog *metricconfig.Catalog
+	client        *vmclient.Client
+	cache         *cache.Scope
+	limits        *limits.Limits
+	obs           *observability.Observability
+	config        vmclient.Config
+	handlers      *Handlers
 }
+
+// SetMetricCatalog binds the immutable startup snapshot before requests are served.
+func (r *Router) SetMetricCatalog(c *metricconfig.Catalog) { r.metricCatalog = c }
 
 // NewRouter creates a new Resource API router. cacheScope is the datasource's share of the app's
 // local cache.
@@ -68,6 +73,7 @@ func (r *Router) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/explorer/v1/series", r.handlers.handleSeries)
 	mux.HandleFunc("/explorer/v1/metadata", r.handlers.handleMetadata)
 	mux.HandleFunc("/explorer/v1/chart-plan", r.handlers.handleChartPlan)
+	mux.HandleFunc("/explorer/v1/configured-charts", r.handlers.handleConfiguredCharts)
 	mux.HandleFunc("/explorer/v1/query-range", r.handlers.handleRangeQuery)
 	mux.HandleFunc("/explorer/v1/diagnostics", r.handlers.handleDiagnostics)
 	mux.HandleFunc("/explorer/v1/cache", r.handlers.handleCacheStats)

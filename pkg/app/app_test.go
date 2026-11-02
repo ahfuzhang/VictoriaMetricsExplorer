@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/metricconfig"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
@@ -680,5 +681,43 @@ func TestProvisionedLocalCacheSizeIsValid(t *testing.T) {
 	}
 	if _, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{"localCacheSize":` + string(value) + `}`)}); err != nil {
 		t.Fatalf("provisioned localCacheSize %s: %v", m[1], err)
+	}
+}
+
+func TestConfiguredChartsUseDatasourceAndOrganizationScope(t *testing.T) {
+	g := newFakeGrafana(t)
+	s, _ := ParseSettings(backend.AppInstanceSettings{})
+	s.PodLabel = "k8s_pod"
+	s.DatasourceUIDs = []string{"vm1", "prom"}
+	s.MetricCatalog = &metricconfig.Catalog{Enabled: true, Files: []metricconfig.File{{Category: metricconfig.Category{ID: "example", Title: "Example"}, Charts: []metricconfig.Chart{
+		{ID: "cpu", Title: "CPU", Description: "CPU", Language: "metricsql", RateWindow: "1m", Match: metricconfig.Match{MetricNames: []string{"process_cpu_seconds_total"}}, Queries: []metricconfig.Query{{RefID: "A", Expr: "sum(rate({{selector:process_cpu_seconds_total}}[{{rateWindow}}]))"}}, Visualization: metricconfig.Visualization{Type: "timeseries", FieldConfig: map[string]any{"defaults": map[string]any{"unit": "percentunit"}, "overrides": []any{}}}},
+		{ID: "missing", Title: "Missing", Language: "metricsql", Match: metricconfig.Match{MetricNames: []string{"nonexistent"}}},
+	}}}}
+	a := newTestApp(t, g, s)
+	req := &explorerpb.ConfiguredChartsRequest{PodGroup: "api.+", Range: &explorerpb.TimeRange{StartMs: 1700000000000, EndMs: 1700003600000}}
+	for _, tc := range []struct {
+		uid        string
+		org        int64
+		status     int
+		categories int
+	}{{"vm1", 1, 200, 1}, {"prom", 1, 200, 0}, {"vm2", 1, 403, 0}, {"vm1", 2, 403, 0}} {
+		res := call(t, a, viewer(tc.org), http.MethodPost, "explorer/v1/ds/"+tc.uid+"/configured-charts", req)
+		if res.status != tc.status {
+			t.Fatalf("%s/org%d: %d %s", tc.uid, tc.org, res.status, res)
+		}
+		if tc.status != 200 {
+			continue
+		}
+		var response explorerpb.ConfiguredChartsResponse
+		res.decode(t, &response)
+		if len(response.Categories) != tc.categories {
+			t.Fatalf("%s: %v", tc.uid, &response)
+		}
+		if tc.categories > 0 {
+			charts := response.Categories[0].Charts
+			if len(charts) != 1 || !strings.Contains(charts[0].Queries[0].Expr, `k8s_pod=~`) || charts[0].Visualization.AsMap()["type"] != "timeseries" {
+				t.Fatalf("unexpected planned charts: %v", charts)
+			}
+		}
 	}
 }

@@ -129,7 +129,7 @@ enum GroupMode {
 
 message MetricIndexRequest {
   TimeRange range = 1;
-  string search = 2;           // substring filter
+  string search = 2;           // case-insensitive RE2 regexp matched anywhere in a name
   GroupMode group_mode = 3;
   string group = 4;            // selected group (empty = all)
   uint32 page = 5;             // 1-based page number
@@ -435,6 +435,7 @@ message RangeQueryRequest {
   // max_data_points points per series; empty or malformed means 1m.
   string step = 3;
   uint32 max_data_points = 4;    // 0 means the backend default (11000)
+  bool instant = 5;             // evaluate at range.end_ms through /api/v1/query
 }
 
 // One series of a range query: timestamps_ms[i] is the time of values[i]. Values may be NaN or

@@ -1,0 +1,313 @@
+# Imported from: dotnet runtime 1-1791858064252.json
+# Scope variables are supplied by Explorer; fixed matchers and panel settings are preserved.
+apiVersion: 1
+category:
+  id: dotnet-gc
+  title: .NET · GC
+  description: dashboard to show metrics who use DotNet open telemetry collector
+  order: 30
+charts:
+- id: panel-70
+  title: gc_count_total(times/min)
+  description: gc_count_total(times/min) — imported from dotnet runtime 1, panel 70.
+  order: 0
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_gen_0_gc_count_total
+    - system_runtime_gen_1_gc_count_total
+    - system_runtime_gen_2_gc_count_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_runtime_gen_0_gc_count_total}}[{{rateWindow}}]))
+    legend: gen_0_gc_count/min
+  - refId: B
+    expr: |
+      sum(increase({{selector:system_runtime_gen_1_gc_count_total}}[{{rateWindow}}]))
+    legend: gen_1_gc_count/min
+  - refId: C
+    expr: |
+      sum(increase({{selector:system_runtime_gen_2_gc_count_total}}[{{rateWindow}}]))
+    legend: gen_2_gc_count/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-92
+  title: dotnet_collection_count_total(times/min)
+  description: dotnet_collection_count_total(times/min) — imported from dotnet runtime 1, panel 92.
+  order: 10
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - dotnet_collection_count_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum by (generation) (increase({{selector:dotnet_collection_count_total}}[{{rateWindow}}]))
+    legend: generation-{{generation}}/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-67
+  title: system_runtime_time_in_gc (< 5% is health)
+  description: |-
+    应用程序启动以来，托管线程花费在 GC（垃圾回收）上的总时间占比。
+    这个指标累积统计了 线程在 GC 上花的时间 / 总运行时间。
+  order: 20
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_time_in_gc
+  queries:
+  - refId: A
+    expr: |
+      avg({{selector:system_runtime_time_in_gc}})
+    legend: avg
+  - refId: B
+    expr: |
+      max({{selector:system_runtime_time_in_gc}})
+    legend: max
+  - refId: C
+    expr: |
+      min({{selector:system_runtime_time_in_gc}})
+    legend: min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: percent
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-82
+  title: system_runtime_gc_fragmentation (Managed Heap)
+  description: 碎片程度
+  order: 30
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_gc_fragmentation
+  queries:
+  - refId: A
+    expr: |
+      max({{selector:system_runtime_gc_fragmentation}})
+    legend: system_runtime_gc_fragmentation
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: percent
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []

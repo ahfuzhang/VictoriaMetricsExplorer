@@ -18,9 +18,13 @@ services:
       # which needs both of these. It only works in org 1.
       - GF_FEATURE_TOGGLES_ENABLE=accessControlOnCallResource,externalServiceAccounts
       - GF_AUTH_MANAGED_SERVICE_ACCOUNTS_ENABLED=true
+      - VMX_METRIC_CONFIG_DIR=/etc/vmx/metrics
+      # Grafana 12.4+ filters plugin process environments unless forwarding is enabled.
+      - GF_PLUGINS_FORWARD_HOST_ENV_VARS=ahfuzhang-victoriametricsexplorer-app
     volumes:
       - ./dist:/var/lib/grafana/plugins/ahfuzhang-victoriametricsexplorer-app
       - ./provisioning:/etc/grafana/provisioning
+      - ./config/metrics:/etc/vmx/metrics:ro
       - grafana-data:/var/lib/grafana
     depends_on:
       - victoriametrics

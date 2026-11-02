@@ -38,6 +38,21 @@ func TestRangeQueryStep(t *testing.T) {
 	}
 }
 
+func TestParseInstantSeries(t *testing.T) {
+	for _, data := range []string{
+		`{"resultType":"vector","result":[{"metric":{"pod":"a"},"value":[1700000000.5,"3.5"]}]}`,
+		`{"resultType":"scalar","result":[1700000000.5,"3.5"]}`,
+	} {
+		series, truncated, err := parseInstantSeries(jsontext.Value(data), 10)
+		if err != nil || truncated || len(series) != 1 || series[0].TimestampsMs[0] != 1700000000500 || series[0].Values[0] != 3.5 {
+			t.Fatalf("instant result: %v, %v, %v", series, truncated, err)
+		}
+	}
+	if _, _, err := parseInstantSeries(jsontext.Value(`{"resultType":"matrix","result":[]}`), 10); err == nil {
+		t.Fatal("matrix accepted as instant vector")
+	}
+}
+
 func TestParseRangeSeries(t *testing.T) {
 	data := jsontext.Value(`{"resultType":"matrix","result":[
 		{"metric":{"le":"0.1"},"values":[[1700000000,"1.5"],[1700000060.5,"NaN"],[1700000120,"+Inf"]]},

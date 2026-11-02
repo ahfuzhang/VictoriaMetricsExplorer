@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"errors"
 	"math"
 	"net/http"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"sort"
 	"strconv"
@@ -242,9 +244,9 @@ func buildMetricIndex(names []string) []*explorerpb.MetricInfo {
 	return metrics
 }
 
-// appendMetricAliases appends the names a metric picker row answers to in searches and favorite
-// lookups: its name, or for a collapsed histogram (whose name is not its query metric) the base and
-// all three member names.
+// appendMetricAliases appends the names a metric picker row answers to in favorite lookups: its
+// name, or for a collapsed histogram (whose name is not its query metric) the base and all three
+// member names.
 func appendMetricAliases(dst []string, m *explorerpb.MetricInfo) []string {
 	if m.Name == m.QueryMetric {
 		return append(dst, m.Name)
@@ -264,6 +266,66 @@ func filterMetricIndex(metrics []*explorerpb.MetricInfo, keep func(alias string)
 		}
 	}
 	return filtered
+}
+
+// searchMetricIndex keeps, in place, the rows search matches. A collapsed histogram also matches
+// through a member name ("<name>_bucket", "_count", "_sum"), so a member name copied from a query
+// still finds it, but not through a suffix search matches on its own: "_bucket" or "count$" would
+// match every histogram, listing rows whose name the pattern visibly misses.
+func searchMetricIndex(metrics []*explorerpb.MetricInfo, search *regexp.Regexp) []*explorerpb.MetricInfo {
+	var suffixBuf [len(histogramSuffixes)]string
+	suffixes := suffixBuf[:0]
+	for _, suffix := range histogramSuffixes {
+		if !search.MatchString(suffix) {
+			suffixes = append(suffixes, suffix)
+		}
+	}
+	// Holds each member name in turn, sized for the longest.
+	var member []byte
+	if len(suffixes) > 0 {
+		longest := 0
+		for _, m := range metrics {
+			if m.Name != m.QueryMetric {
+				longest = max(longest, len(m.Name))
+			}
+		}
+		member = make([]byte, 0, longest+len("_bucket"))
+	}
+
+	filtered := metrics[:0]
+	for _, m := range metrics {
+		keep := search.MatchString(m.Name)
+		if !keep && m.Name != m.QueryMetric {
+			for _, suffix := range suffixes {
+				member = append(append(member[:0], m.Name...), suffix...)
+				if keep = search.Match(member); keep {
+					break
+				}
+			}
+		}
+		if keep {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
+}
+
+// compileMetricSearch compiles a metric-index search: an RE2 pattern matched case-insensitively
+// anywhere in a name, so a plain name fragment still finds every name holding it. An empty search
+// compiles to nil (no filter).
+func compileMetricSearch(search string) (*regexp.Regexp, error) {
+	if search == "" {
+		return nil, nil
+	}
+	// Parsed on its own first, so an error quotes the user's pattern rather than the (?i) prefix.
+	if _, err := syntax.Parse(search, syntax.Perl); err != nil {
+		// The bare reason ("missing closing ]: `[`"), without the "error parsing regexp" preamble.
+		if e, ok := err.(*syntax.Error); ok {
+			return nil, errors.New(string(e.Code) + ": `" + e.Expr + "`")
+		}
+		return nil, err
+	}
+	return regexp.Compile("(?i)" + search)
 }
 
 // metricsInGroup keeps, in place, the rows of one prefix group.
@@ -389,6 +451,11 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	if req.Sort == "" {
 		req.Sort = "name"
 	}
+	search, err := compileMetricSearch(req.Search)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_search", err.Error(), requestID)
+		return
+	}
 
 	startTime, endTime := h.timeRange(req.Range)
 	// Use day-granularity time range for label values API
@@ -426,11 +493,8 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply search filter
-	if req.Search != "" {
-		searchLower := strings.ToLower(req.Search)
-		entries = filterMetricIndex(entries, func(alias string) bool {
-			return strings.Contains(strings.ToLower(alias), searchLower)
-		})
+	if search != nil {
+		entries = searchMetricIndex(entries, search)
 	}
 
 	// The list is sorted by name.
@@ -513,6 +577,7 @@ func (h *Handlers) handleMetricIndex(w http.ResponseWriter, r *http.Request) {
 	log.DefaultLogger.Info("metric-index",
 		"uid", h.router.config.UID,
 		"requestId", requestID,
+		"search", req.Search,
 		"total", totalCount,
 		"returned", len(metrics),
 		"page", req.Page,

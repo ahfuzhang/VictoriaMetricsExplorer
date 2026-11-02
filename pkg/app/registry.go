@@ -211,6 +211,7 @@ func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target,
 		return nil, err
 	}
 	router := resource.NewRouter(client, r.cache.Scope(), r.lim, obs, client.Config())
+	router.SetMetricCatalog(r.settings.MetricCatalog)
 	return &target{
 		key:         targetKey(orgID, info.UID),
 		fingerprint: fp,

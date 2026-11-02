@@ -1,0 +1,775 @@
+# Imported from: dotnet runtime 1-1791858064252.json
+# Scope variables are supplied by Explorer; fixed matchers and panel settings are preserved.
+apiVersion: 1
+category:
+  id: dotnet-cpu
+  title: .NET · CPU
+  description: dashboard to show metrics who use DotNet open telemetry collector
+  order: 10
+charts:
+- id: panel-96
+  title: process_cpu_seconds_total / s
+  description: process_cpu_seconds_total / s — imported from dotnet runtime 1, panel 96.
+  order: 0
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - kube_pod_container_resource_limits
+    - process_cpu_seconds_total
+  rateWindow: 1m
+  selectors:
+    kube_pod_container_resource_limits_filtered:
+      metricName: kube_pod_container_resource_limits
+      matchers:
+      - label: resource
+        op: '='
+        value: cpu
+  queries:
+  - refId: A
+    expr: |
+      (sum by ()(rate({{selector:process_cpu_seconds_total}}[{{rateWindow}}])))
+    legend: process_cpu_seconds_total
+  - refId: B
+    expr: |
+      sum({{selector:kube_pod_container_resource_limits_filtered}})
+    legend: CPU Count
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: percentunit
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - matcher:
+          id: byFrameRefID
+          options: B
+        properties:
+        - id: custom.axisPlacement
+          value: right
+        - id: unit
+          value: none
+        - id: custom.lineWidth
+          value: 0
+        - id: custom.pointSize
+          value: 3
+- id: panel-24
+  title: threads
+  description: threads — imported from dotnet runtime 1, panel 24.
+  order: 10
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - process_num_threads
+    - system_runtime_threadpool_thread_count
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:process_num_threads}})
+    legend: process_num_threads
+  - refId: B
+    expr: |
+      sum({{selector:system_runtime_threadpool_thread_count}})
+    legend: threadpool_thread_count
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - __systemRef: hideSeriesFrom
+        matcher:
+          id: byNames
+          options:
+            mode: exclude
+            names:
+            - process_num_threads
+            prefix: 'All except:'
+            readOnly: true
+        properties:
+        - id: custom.hideFrom
+          value:
+            legend: false
+            tooltip: true
+            viz: true
+- id: panel-97
+  title: system_runtime_cpu_usage / pod_count
+  description: 每个容器内的 dotnet runtime 统计出来的 cpu 利用率(0%~100%) 的累加
+  order: 20
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_cpu_usage
+  queries:
+  - refId: A
+    expr: |
+      (sum by ()({{selector:system_runtime_cpu_usage}})) / (count by ()({{selector:system_runtime_cpu_usage}}))
+    legend: system_runtime_cpu_usage
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: percent
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-88
+  title: system_runtime_exception_count_total / min
+  description: system_runtime_exception_count_total / min — imported from dotnet runtime 1, panel 88.
+  order: 30
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_exception_count_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_runtime_exception_count_total}}[{{rateWindow}}]))
+    legend: system_runtime_exception_count_total
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-108
+  title: system_runtime_dotnet_exceptions / min
+  description: system_runtime_dotnet_exceptions / min — imported from dotnet runtime 1, panel 108.
+  order: 40
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_dotnet_exceptions
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum by (error_type) (increase({{selector:system_runtime_dotnet_exceptions}}[{{rateWindow}}]))
+    legend: '{{error_type}}'
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-85
+  title: system_runtime_threadpool_queue_length
+  description: system_runtime_threadpool_queue_length — imported from dotnet runtime 1, panel 85.
+  order: 50
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_threadpool_queue_length
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:system_runtime_threadpool_queue_length}})
+    legend: system_runtime_threadpool_queue_length
+  visualization:
+    type: timeseries
+    width: 3
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-86
+  title: system_runtime_active_timer_count
+  description: system_runtime_active_timer_count — imported from dotnet runtime 1, panel 86.
+  order: 60
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_active_timer_count
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:system_runtime_active_timer_count}})
+    legend: system_runtime_active_timer_count
+  visualization:
+    type: timeseries
+    width: 3
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-84
+  title: system_runtime_threadpool_completed_items_count_total/min
+  description: system_runtime_threadpool_completed_items_count_total/min — imported from dotnet runtime 1, panel 84.
+  order: 70
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_threadpool_completed_items_count_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_runtime_threadpool_completed_items_count_total}}[{{rateWindow}}]))
+    legend: system_runtime_threadpool_completed_items_count_total/min
+  visualization:
+    type: timeseries
+    width: 3
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-99
+  title: system_runtime_cpu_usage (* cores_count)
+  description: system_runtime_cpu_usage (* cores_count) — imported from dotnet runtime 1, panel 99.
+  order: 80
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_spec_cpu_period
+    - container_spec_cpu_quota
+    - system_runtime_cpu_usage
+  selectors:
+    container_spec_cpu_period_filtered:
+      metricName: container_spec_cpu_period
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by ()({{selector:system_runtime_cpu_usage}}))*(sum({{selector:container_spec_cpu_quota}}) / sum({{selector:container_spec_cpu_period_filtered}}))
+    legend: system_runtime_cpu_usage
+  visualization:
+    type: timeseries
+    width: 3
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: percent
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-112
+  title: application_error_code_total / min
+  description: application_error_code_total / min — imported from dotnet runtime 1, panel 112.
+  order: 90
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - application_error_code_total
+    - application_warning_code_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:application_error_code_total}}[{{rateWindow}}]))
+    legend: application_error_code_total
+  - refId: B
+    expr: |
+      sum(increase({{selector:application_warning_code_total}}[{{rateWindow}}]))
+    legend: application_warning_code_total
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []

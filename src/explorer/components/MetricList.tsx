@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
-import { Alert, Button, Input, LoadingPlaceholder, useStyles2 } from '@grafana/ui';
+import { Alert, Button, Icon, Input, LoadingPlaceholder, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
 import { Capabilities, MetricInfo, MetricKind } from '../model';
-import { fetchMetricIndex, fetchMetricTypes, describeError } from '../api';
+import { backendError, fetchMetricIndex, fetchMetricTypes, describeError } from '../api';
 import type { MetricScope } from './Explorer';
 
 // One request per page of names; the backend caps a request at 500.
@@ -30,6 +30,9 @@ interface Props {
   timeRange: TimeRange;
   refreshKey: number;
   onSelectMetric: (metric: string) => void;
+  showImportantMetrics?: boolean;
+  importantMetricsSelected?: boolean;
+  onSelectImportantMetrics?: () => void;
 }
 
 export const MetricList: React.FC<Props> = ({
@@ -40,6 +43,9 @@ export const MetricList: React.FC<Props> = ({
   timeRange,
   refreshKey,
   onSelectMetric,
+  showImportantMetrics,
+  importantMetricsSelected,
+  onSelectImportantMetrics,
 }) => {
   const styles = useStyles2(getStyles);
 
@@ -47,6 +53,8 @@ export const MetricList: React.FC<Props> = ({
   const [metrics, setMetrics] = useState<MetricInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // The backend's reason for rejecting the search as a regular expression, shown under the input.
+  const [searchError, setSearchError] = useState('');
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -137,6 +145,7 @@ export const MetricList: React.FC<Props> = ({
       const request = ++requestRef.current;
       setLoading(true);
       setError('');
+      setSearchError('');
       try {
         const params = scopeParams(scope);
         const response = await fetchMetricIndex(datasourceUID, {
@@ -167,7 +176,16 @@ export const MetricList: React.FC<Props> = ({
         setTruncated(response.meta.truncated);
         setPage(response.page);
       } catch (err: unknown) {
-        if (request === requestRef.current) {
+        if (request !== requestRef.current) {
+          return;
+        }
+        const rejected = backendError(err);
+        if (rejected?.code === 'invalid_search') {
+          setSearchError(rejected.message);
+          setTotalCount(0);
+          setTotalPages(1);
+          setTruncated(false);
+        } else {
           console.error('Failed to load metrics', err);
           setError(describeError(err));
         }
@@ -226,6 +244,15 @@ export const MetricList: React.FC<Props> = ({
         : scope.kind === 'node'
           ? `Node: ${scope.node}`
           : 'All metrics';
+  // The first-column branch the list came from, named in the heading; All metrics names none.
+  const scopeSource =
+    scope.kind === 'pod'
+      ? { label: 'pod prefix', value: scope.group }
+      : scope.kind === 'node'
+        ? { label: 'node', value: scope.node }
+        : scope.kind === 'group'
+          ? { label: 'metric name prefix', value: scope.group }
+          : null;
 
   return (
     <div className={styles.container}>
@@ -233,15 +260,41 @@ export const MetricList: React.FC<Props> = ({
         <div className={styles.headingRow}>
           <span className={styles.stepNumber}>02</span>
           <h2 className={styles.title}>Metric names</h2>
+          {scopeSource && (
+            <span className={styles.scopeSource} title={`${scopeSource.label} ${scopeSource.value}`}>
+              {scopeSource.label} <span className={styles.scopeSourceValue}>{scopeSource.value}</span>
+            </span>
+          )}
         </div>
+        {showImportantMetrics && (
+          <a
+            href="#important-metrics"
+            className={styles.importantMetricsLink}
+            aria-current={importantMetricsSelected ? 'page' : undefined}
+            onClick={(event) => {
+              event.preventDefault();
+              onSelectImportantMetrics?.();
+            }}
+          >
+            <Icon name="chart-line" size="lg" aria-hidden="true" />
+            <span>Important Metrics</span>
+            <Icon name="arrow-right" className={styles.importantMetricsArrow} aria-hidden="true" />
+          </a>
+        )}
         <Input
           aria-label="Search metric names"
-          placeholder="Search metrics…"
+          placeholder="Search metrics (regex)…"
           value={search}
           onChange={(event) => setSearch(event.currentTarget.value)}
           prefix={<span aria-hidden="true">⌕</span>}
           className={styles.searchInput}
+          invalid={searchError !== ''}
         />
+        {searchError && (
+          <div className={styles.searchError} role="alert">
+            Invalid regular expression: {searchError}
+          </div>
+        )}
         <div className={styles.scopeLabel}>{scopeLabel}</div>
       </div>
 
@@ -256,7 +309,7 @@ export const MetricList: React.FC<Props> = ({
             <LoadingPlaceholder text="Loading metrics…" />
           </div>
         ) : metrics.length === 0 ? (
-          !error && <div className={styles.empty}>No metrics found.</div>
+          !error && !searchError && <div className={styles.empty}>No metrics found.</div>
         ) : visibleMetrics.length === 0 && !loading && !typesPending ? (
           <div className={styles.empty}>No metrics of this type.</div>
         ) : (
@@ -394,11 +447,66 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   title: css({
     margin: 0,
+    flexShrink: 0,
     fontSize: theme.typography.size.sm,
     fontWeight: theme.typography.fontWeightBold,
   }),
+  scopeSource: css({
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.size.xs,
+  }),
+  scopeSourceValue: css({
+    color: theme.colors.text.primary,
+    fontFamily: theme.typography.fontFamilyMonospace,
+  }),
   searchInput: css({
     width: '100%',
+  }),
+  searchError: css({
+    marginTop: theme.spacing(-0.5),
+    color: theme.colors.error.text,
+    fontSize: theme.typography.size.xs,
+    overflowWrap: 'anywhere',
+  }),
+  importantMetricsLink: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    minHeight: 44,
+    padding: theme.spacing(1, 1.5),
+    border: `1px solid ${theme.colors.primary.main}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.primary.main,
+    color: theme.colors.primary.contrastText,
+    fontSize: theme.typography.body.fontSize,
+    fontWeight: theme.typography.fontWeightBold,
+    cursor: 'pointer',
+    textDecoration: 'none',
+    transition: 'background-color 150ms ease, border-color 150ms ease',
+    '&:hover': {
+      background: theme.colors.primary.shade,
+      borderColor: theme.colors.primary.shade,
+      color: theme.colors.primary.contrastText,
+      textDecoration: 'none',
+    },
+    '&:focus-visible': {
+      outline: `2px solid ${theme.colors.primary.text}`,
+      outlineOffset: 2,
+    },
+    '&:active': {
+      transform: 'translateY(1px)',
+    },
+    '&[aria-current="page"]': {
+      boxShadow: `inset 0 0 0 1px ${theme.colors.primary.contrastText}`,
+    },
+  }),
+  importantMetricsArrow: css({
+    marginLeft: 'auto',
+    flexShrink: 0,
   }),
   scopeLabel: css({
     color: theme.colors.text.secondary,

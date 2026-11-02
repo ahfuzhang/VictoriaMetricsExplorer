@@ -856,7 +856,7 @@ func (x *CapabilitiesResponse) GetKnowledgeBaseVersion() string {
 type MetricIndexRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Range         *TimeRange             `protobuf:"bytes,1,opt,name=range,proto3" json:"range,omitempty"`
-	Search        string                 `protobuf:"bytes,2,opt,name=search,proto3" json:"search,omitempty"` // substring filter
+	Search        string                 `protobuf:"bytes,2,opt,name=search,proto3" json:"search,omitempty"` // case-insensitive RE2 regexp matched anywhere in a name
 	GroupMode     GroupMode              `protobuf:"varint,3,opt,name=group_mode,json=groupMode,proto3,enum=explorer.GroupMode" json:"group_mode,omitempty"`
 	Group         string                 `protobuf:"bytes,4,opt,name=group,proto3" json:"group,omitempty"`                        // selected group (empty = all)
 	Page          uint32                 `protobuf:"varint,5,opt,name=page,proto3" json:"page,omitempty"`                         // 1-based page number
@@ -3044,6 +3044,7 @@ type RangeQueryRequest struct {
 	// max_data_points points per series; empty or malformed means 1m.
 	Step          string `protobuf:"bytes,3,opt,name=step,proto3" json:"step,omitempty"`
 	MaxDataPoints uint32 `protobuf:"varint,4,opt,name=max_data_points,json=maxDataPoints,proto3" json:"max_data_points,omitempty"` // 0 means the backend default (11000)
+	Instant       bool   `protobuf:"varint,5,opt,name=instant,proto3" json:"instant,omitempty"`                                    // evaluate at range.end_ms through /api/v1/query
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3104,6 +3105,13 @@ func (x *RangeQueryRequest) GetMaxDataPoints() uint32 {
 		return x.MaxDataPoints
 	}
 	return 0
+}
+
+func (x *RangeQueryRequest) GetInstant() bool {
+	if x != nil {
+		return x.Instant
+	}
+	return false
 }
 
 // One series of a range query: timestamps_ms[i] is the time of values[i]. Values may be NaN or
@@ -3920,12 +3928,13 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\asummary\x18\x04 \x01(\v2\x16.explorer.ChartSummaryR\asummary\x12A\n" +
 	"\x0fhistogram_table\x18\x05 \x01(\v2\x18.explorer.HistogramTableR\x0ehistogramTable\x122\n" +
 	"\n" +
-	"stat_table\x18\x06 \x01(\v2\x13.explorer.StatTableR\tstatTable\"\x90\x01\n" +
+	"stat_table\x18\x06 \x01(\v2\x13.explorer.StatTableR\tstatTable\"\xaa\x01\n" +
 	"\x11RangeQueryRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12)\n" +
 	"\x05range\x18\x02 \x01(\v2\x13.explorer.TimeRangeR\x05range\x12\x12\n" +
 	"\x04step\x18\x03 \x01(\tR\x04step\x12&\n" +
-	"\x0fmax_data_points\x18\x04 \x01(\rR\rmaxDataPoints\"\xbe\x01\n" +
+	"\x0fmax_data_points\x18\x04 \x01(\rR\rmaxDataPoints\x12\x18\n" +
+	"\ainstant\x18\x05 \x01(\bR\ainstant\"\xbe\x01\n" +
 	"\n" +
 	"TimeSeries\x128\n" +
 	"\x06labels\x18\x01 \x03(\v2 .explorer.TimeSeries.LabelsEntryR\x06labels\x12#\n" +

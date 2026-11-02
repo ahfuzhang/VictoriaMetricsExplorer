@@ -1,0 +1,43 @@
+syntax = "proto3";
+package explorer;
+option go_package = "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer;explorerpb";
+
+import "explorer/explorer.proto";
+import "google/protobuf/struct.proto";
+
+message ConfiguredChartsRequest {
+  string pod_group = 1;
+  TimeRange range = 2;
+  repeated LabelFilter filters = 3;
+}
+
+message ConfiguredQuery {
+  string ref_id = 1;
+  string expr = 2;
+  string legend = 3;
+  bool instant = 4;
+  bool hidden = 5;
+  string axis = 6;
+}
+
+message ConfiguredChart {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  repeated ConfiguredQuery queries = 4;
+  google.protobuf.Struct visualization = 5;
+  google.protobuf.Struct summary = 6;
+}
+
+message ConfiguredCategory {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  repeated ConfiguredChart charts = 4;
+}
+
+message ConfiguredChartsResponse {
+  repeated ConfiguredCategory categories = 1;
+  bool partial = 2;
+  bool enabled = 3;
+}

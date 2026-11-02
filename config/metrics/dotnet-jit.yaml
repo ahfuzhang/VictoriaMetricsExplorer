@@ -1,0 +1,295 @@
+# Imported from: dotnet runtime 1-1791858064252.json
+# Scope variables are supplied by Explorer; fixed matchers and panel settings are preserved.
+apiVersion: 1
+category:
+  id: dotnet-jit
+  title: .NET · JIT
+  description: dashboard to show metrics who use DotNet open telemetry collector
+  order: 50
+charts:
+- id: panel-68
+  title: system_runtime_time_in_jit_total
+  description: system_runtime_time_in_jit_total — imported from dotnet runtime 1, panel 68.
+  order: 0
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_time_in_jit_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_runtime_time_in_jit_total}}[{{rateWindow}}]))
+    legend: system_runtime_time_in_jit_total/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-71
+  title: system_runtime_il_bytes_jitted(bytes/min) Intermediate Language
+  description: 属于 .NET Runtime 在 JIT（Just-In-Time 编译） 方面的监控项。
+  order: 10
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_il_bytes_jitted
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_runtime_il_bytes_jitted}}[{{rateWindow}}]))
+    legend: system_runtime_il_bytes_jitted/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-76
+  title: system_runtime_methods_jitted_count(bytes/min)
+  description: system_runtime_methods_jitted_count(bytes/min) — imported from dotnet runtime 1, panel 76.
+  order: 20
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_methods_jitted_count
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_runtime_methods_jitted_count}}[{{rateWindow}}]))
+    legend: system_runtime_methods_jitted_count/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-87
+  title: system_runtime_assembly_count/min
+  description: system_runtime_assembly_count/min — imported from dotnet runtime 1, panel 87.
+  order: 30
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_assembly_count
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_runtime_assembly_count}}[{{rateWindow}}]))
+    legend: system_runtime_assembly_count/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []

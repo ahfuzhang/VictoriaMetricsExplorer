@@ -1,0 +1,909 @@
+# Imported from: dotnet runtime 1-1791858064252.json
+# Scope variables are supplied by Explorer; fixed matchers and panel settings are preserved.
+apiVersion: 1
+category:
+  id: dotnet-container
+  title: .NET · Container
+  description: dashboard to show metrics who use DotNet open telemetry collector
+  order: 70
+charts:
+- id: panel-95
+  title: container_cpu_usage_seconds_total
+  description: container_cpu_usage_seconds_total — imported from dotnet runtime 1, panel 95.
+  order: 0
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_cpu_usage_seconds_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      (sum by () (rate({{selector:container_cpu_usage_seconds_total}}[{{rateWindow}}])))
+    legend: container_cpu_usage_seconds_total
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: percentunit
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-94
+  title: CPU time
+  description: CPU time — imported from dotnet runtime 1, panel 94.
+  order: 10
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_cpu_system_seconds_total
+    - container_cpu_user_seconds_total
+  rateWindow: 1m
+  selectors:
+    container_cpu_system_seconds_total_filtered:
+      metricName: container_cpu_system_seconds_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_cpu_user_seconds_total_filtered:
+      metricName: container_cpu_user_seconds_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by ()(rate({{selector:container_cpu_system_seconds_total_filtered}}[{{rateWindow}}])))
+    legend: system
+  - refId: B
+    expr: |
+      (sum by ()(rate({{selector:container_cpu_user_seconds_total_filtered}}[{{rateWindow}}])))
+    legend: user
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: percentunit
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: normal
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - matcher:
+          id: byName
+          options: process_cpu_seconds_system_total
+        properties:
+        - id: custom.fillOpacity
+          value: 44
+      - matcher:
+          id: byName
+          options: process_cpu_seconds_user_total
+        properties:
+        - id: custom.fillOpacity
+          value: 43
+- id: panel-98
+  title: cpu count
+  description: cpu count — imported from dotnet runtime 1, panel 98.
+  order: 20
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_spec_cpu_period
+    - container_spec_cpu_quota
+  selectors:
+    container_spec_cpu_period_filtered:
+      metricName: container_spec_cpu_period
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:container_spec_cpu_quota}}) / sum({{selector:container_spec_cpu_period_filtered}})
+    legend: cpu count
+  visualization:
+    type: stat
+    width: 6
+    height: 256
+    options:
+      colorMode: value
+      graphMode: area
+      justifyMode: auto
+      orientation: auto
+      percentChangeColorMode: standard
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      showPercentChange: false
+      textMode: auto
+      wideLayout: true
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: thresholds
+      overrides: []
+- id: panel-104
+  title: processes
+  description: processes — imported from dotnet runtime 1, panel 104.
+  order: 30
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_processes
+  selectors:
+    container_processes_filtered:
+      metricName: container_processes
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:container_processes_filtered}})
+    legend: processes
+  visualization:
+    type: stat
+    width: 3
+    height: 256
+    options:
+      colorMode: value
+      graphMode: area
+      justifyMode: auto
+      orientation: auto
+      percentChangeColorMode: standard
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      showPercentChange: false
+      textMode: auto
+      wideLayout: true
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: thresholds
+      overrides: []
+- id: panel-105
+  title: threads
+  description: threads — imported from dotnet runtime 1, panel 105.
+  order: 40
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_threads
+  selectors:
+    container_threads_filtered:
+      metricName: container_threads
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:container_threads_filtered}})
+    legend: threads
+  visualization:
+    type: stat
+    width: 3
+    height: 256
+    options:
+      colorMode: value
+      graphMode: area
+      justifyMode: auto
+      orientation: auto
+      percentChangeColorMode: standard
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      showPercentChange: false
+      textMode: auto
+      wideLayout: true
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: thresholds
+      overrides: []
+- id: panel-103
+  title: physical memory
+  description: physical memory — imported from dotnet runtime 1, panel 103.
+  order: 50
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_memory_rss
+    - container_spec_memory_limit_bytes
+  selectors:
+    container_memory_rss_filtered:
+      metricName: container_memory_rss
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_spec_memory_limit_bytes_filtered:
+      metricName: container_spec_memory_limit_bytes
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by () ({{selector:container_memory_rss_filtered}}))
+    legend: physical mem
+  - refId: B
+    expr: |
+      (sum by () ({{selector:container_spec_memory_limit_bytes_filtered}}))
+    legend: max
+  - refId: C
+    expr: |
+      (sum by () ({{selector:container_memory_rss_filtered}}))/(sum by () ({{selector:container_spec_memory_limit_bytes_filtered}}))
+    legend: percent
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - matcher:
+          id: byName
+          options: percent
+        properties:
+        - id: custom.axisPlacement
+          value: right
+        - id: unit
+          value: percentunit
+- id: panel-101
+  title: disk IO times
+  description: disk IO times — imported from dotnet runtime 1, panel 101.
+  order: 60
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_fs_reads_total
+    - container_fs_writes_total
+  rateWindow: 1m
+  selectors:
+    container_fs_reads_total_filtered:
+      metricName: container_fs_reads_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_fs_writes_total_filtered:
+      metricName: container_fs_writes_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by () (increase({{selector:container_fs_reads_total_filtered}}[{{rateWindow}}])))
+    legend: fs_reads_times/min
+  - refId: B
+    expr: |
+      (sum by () (increase({{selector:container_fs_writes_total_filtered}}[{{rateWindow}}])))
+    legend: fs_writes_times/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-100
+  title: disk IO
+  description: disk IO — imported from dotnet runtime 1, panel 100.
+  order: 70
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_fs_reads_bytes_total
+    - container_fs_writes_bytes_total
+  rateWindow: 1m
+  selectors:
+    container_fs_reads_bytes_total_filtered:
+      metricName: container_fs_reads_bytes_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_fs_writes_bytes_total_filtered:
+      metricName: container_fs_writes_bytes_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by () (increase({{selector:container_fs_reads_bytes_total_filtered}}[{{rateWindow}}])))
+    legend: fs_reads_bytes/min
+  - refId: B
+    expr: |
+      (sum by () (increase({{selector:container_fs_writes_bytes_total_filtered}}[{{rateWindow}}])))
+    legend: fs_writes_bytes/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-106
+  title: Network
+  description: Network — imported from dotnet runtime 1, panel 106.
+  order: 80
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_network_receive_bytes_total
+    - container_network_transmit_bytes_total
+  rateWindow: 1m
+  selectors:
+    container_network_receive_bytes_total_filtered:
+      metricName: container_network_receive_bytes_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_network_transmit_bytes_total_filtered:
+      metricName: container_network_transmit_bytes_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by () (increase({{selector:container_network_receive_bytes_total_filtered}}[{{rateWindow}}])))
+    legend: receive_bytes/min
+  - refId: B
+    expr: |
+      (sum by () (increase({{selector:container_network_transmit_bytes_total_filtered}}[{{rateWindow}}])))
+    legend: transmit_bytes/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-107
+  title: network errors
+  description: network errors — imported from dotnet runtime 1, panel 107.
+  order: 90
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_network_receive_errors_total
+    - container_network_receive_packets_dropped_total
+    - container_network_transmit_errors_total
+    - container_network_transmit_packets_dropped_total
+  rateWindow: 1m
+  selectors:
+    container_network_receive_errors_total_filtered:
+      metricName: container_network_receive_errors_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_network_receive_packets_dropped_total_filtered:
+      metricName: container_network_receive_packets_dropped_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_network_transmit_errors_total_filtered:
+      metricName: container_network_transmit_errors_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_network_transmit_packets_dropped_total_filtered:
+      metricName: container_network_transmit_packets_dropped_total
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by () (increase({{selector:container_network_receive_errors_total_filtered}}[{{rateWindow}}])))
+    legend: receive_errors/min
+  - refId: B
+    expr: |
+      (sum by () (increase({{selector:container_network_receive_packets_dropped_total_filtered}}[{{rateWindow}}])))
+    legend: receive_packets_dropped/min
+  - refId: C
+    expr: |
+      (sum by () (increase({{selector:container_network_transmit_errors_total_filtered}}[{{rateWindow}}])))
+    legend: transmit_errors/min
+  - refId: D
+    expr: |
+      (sum by () (increase({{selector:container_network_transmit_packets_dropped_total_filtered}}[{{rateWindow}}])))
+    legend: transmit_packets_dropped/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-102
+  title: file_descriptors
+  description: file_descriptors — imported from dotnet runtime 1, panel 102.
+  order: 100
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - container_file_descriptors
+    - container_sockets
+  selectors:
+    container_file_descriptors_filtered:
+      metricName: container_file_descriptors
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+    container_sockets_filtered:
+      metricName: container_sockets
+      matchers:
+      - label: image
+        op: '!~'
+        value: ^(?:.*(proxy|pause).*)?$
+  queries:
+  - refId: A
+    expr: |
+      (sum by () ({{selector:container_file_descriptors_filtered}}))
+    legend: file_descriptors
+  - refId: B
+    expr: |
+      (sum by () ({{selector:container_sockets_filtered}}))
+    legend: container_sockets
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []

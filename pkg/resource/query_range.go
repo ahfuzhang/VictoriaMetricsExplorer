@@ -56,17 +56,31 @@ func (h *Handlers) handleRangeQuery(w http.ResponseWriter, r *http.Request) {
 	step := formatStep(stepSec)
 	// Align both ends to the step, as Grafana's Prometheus datasource does, so consecutive
 	// refreshes sample the same instants.
-	start = time.Unix(start.Unix()-start.Unix()%stepSec, 0)
-	end = time.Unix(end.Unix()-end.Unix()%stepSec, 0)
+	if !req.Instant {
+		start = time.Unix(start.Unix()-start.Unix()%stepSec, 0)
+		end = time.Unix(end.Unix()-end.Unix()%stepSec, 0)
+	}
 
-	data, err := h.router.client.QueryRange(r.Context(), query, start, end, step)
+	var data jsontext.Value
+	var err error
+	if req.Instant {
+		data, err = h.router.client.Query(r.Context(), query, end)
+	} else {
+		data, err = h.router.client.QueryRange(r.Context(), query, start, end, step)
+	}
 	if err != nil {
 		log.DefaultLogger.Warn("query-range: upstream query failed", "error", err, "requestId", requestID)
 		h.router.obs.RecordError("upstream_error")
 		writeError(w, http.StatusBadGateway, "upstream_error", "range query failed: "+err.Error(), requestID)
 		return
 	}
-	series, truncated, err := parseRangeSeries(data, rangeQueryMaxSeries)
+	var series []*explorerpb.TimeSeries
+	var truncated bool
+	if req.Instant {
+		series, truncated, err = parseInstantSeries(data, rangeQueryMaxSeries)
+	} else {
+		series, truncated, err = parseRangeSeries(data, rangeQueryMaxSeries)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", "cannot read the range query result: "+err.Error(), requestID)
 		return
@@ -89,6 +103,49 @@ func (h *Handlers) handleRangeQuery(w http.ResponseWriter, r *http.Request) {
 		Series: series,
 		Step:   step,
 	}, requestID)
+}
+
+// parseInstantSeries adapts vector/scalar samples into the same frame wire format as ranges.
+func parseInstantSeries(data jsontext.Value, maxSeries int) ([]*explorerpb.TimeSeries, bool, error) {
+	var result struct {
+		ResultType string         `json:"resultType"`
+		Result     jsontext.Value `json:"result"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, false, err
+	}
+	type vectorSample struct {
+		Metric map[string]string `json:"metric"`
+		Value  [2]jsontext.Value `json:"value"`
+	}
+	var samples []vectorSample
+	switch result.ResultType {
+	case "vector":
+		if err := json.Unmarshal(result.Result, &samples); err != nil {
+			return nil, false, err
+		}
+	case "scalar":
+		var sample vectorSample
+		if err := json.Unmarshal(result.Result, &sample.Value); err != nil {
+			return nil, false, err
+		}
+		samples = append(samples, sample)
+	default:
+		return nil, false, errors.New("unexpected instant result type " + result.ResultType)
+	}
+	// Reuse the range parser's handling of timestamps and non-finite values.
+	matrix := struct {
+		ResultType string           `json:"resultType"`
+		Result     []map[string]any `json:"result"`
+	}{ResultType: "matrix"}
+	for _, sample := range samples {
+		matrix.Result = append(matrix.Result, map[string]any{"metric": sample.Metric, "values": [][2]jsontext.Value{sample.Value}})
+	}
+	b, err := json.Marshal(matrix)
+	if err != nil {
+		return nil, false, err
+	}
+	return parseRangeSeries(b, maxSeries)
 }
 
 // niceSteps are the steps a raised step is rounded up to, in seconds.

@@ -11,6 +11,7 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/metricconfig"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/resource"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
@@ -18,6 +19,8 @@ import (
 // Settings holds the parsed app configuration (the app's jsonData). It never contains
 // credentials: connection details live in the Grafana datasources the app explores.
 type Settings struct {
+	// MetricCatalog is the immutable process-wide YAML snapshot, shared by all organizations.
+	MetricCatalog *metricconfig.Catalog
 	// DatasourceUIDs optionally restricts which datasources the Explorer may query. When
 	// empty, every Prometheus or VictoriaMetrics datasource in the organization is available.
 	//

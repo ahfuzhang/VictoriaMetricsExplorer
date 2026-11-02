@@ -1,0 +1,633 @@
+# Imported from: dotnet runtime 1-1791858064252.json
+# Scope variables are supplied by Explorer; fixed matchers and panel settings are preserved.
+apiVersion: 1
+category:
+  id: dotnet-net-io
+  title: .NET · Net / IO
+  description: dashboard to show metrics who use DotNet open telemetry collector
+  order: 40
+charts:
+- id: panel-62
+  title: system_net_sockets
+  description: system_net_sockets — imported from dotnet runtime 1, panel 62.
+  order: 0
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_net_sockets_bytes_received
+    - system_net_sockets_bytes_sent
+    - system_net_sockets_datagrams_receive
+    - system_net_sockets_datagrams_sent
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(rate({{selector:system_net_sockets_bytes_received}}[{{rateWindow}}]))
+    legend: bytes_received/s
+  - refId: B
+    expr: |
+      sum(rate({{selector:system_net_sockets_bytes_sent}}[{{rateWindow}}]))
+    legend: bytes_sent/s
+  - refId: C
+    expr: |
+      sum(rate({{selector:system_net_sockets_datagrams_receive}}[{{rateWindow}}]))
+    legend: datagrams_receive/s
+  - refId: D
+    expr: |
+      sum(rate({{selector:system_net_sockets_datagrams_sent}}[{{rateWindow}}]))
+    legend: datagrams_sent/s
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-63
+  title: tcp connections
+  description: tcp connections — imported from dotnet runtime 1, panel 63.
+  order: 10
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_net_sockets_incoming_connections_established
+    - system_net_sockets_outgoing_connections_established
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_net_sockets_incoming_connections_established}}[{{rateWindow}}]))
+    legend: incoming_connections_established/min
+  - refId: B
+    expr: |
+      sum(increase({{selector:system_net_sockets_outgoing_connections_established}}[{{rateWindow}}]))
+    legend: outgoing_connections_established/min
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-64
+  title: DNS
+  description: DNS — imported from dotnet runtime 1, panel 64.
+  order: 20
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_net_nameresolution_current_dns_lookups
+    - system_net_nameresolution_dns_lookups_requested
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:system_net_nameresolution_current_dns_lookups}})
+    legend: current_dns_lookups
+  - refId: B
+    expr: |
+      sum(increase({{selector:system_net_nameresolution_dns_lookups_requested}}[{{rateWindow}}]))
+    legend: dns_lookups_requested/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-65
+  title: dns_lookups_duration
+  description: dns_lookups_duration — imported from dotnet runtime 1, panel 65.
+  order: 30
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_net_nameresolution_dns_lookups_duration
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:system_net_nameresolution_dns_lookups_duration}})
+    legend: dns_lookups_duration
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-77
+  title: http
+  description: http — imported from dotnet runtime 1, panel 77.
+  order: 40
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_net_http_current_requests
+    - system_net_http_http11_connections_current_total
+    - system_net_http_http20_connections_current_total
+    - system_net_http_requests_started_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_net_http_current_requests}}[{{rateWindow}}]))
+    legend: system_net_http_current_requests/min
+  - refId: B
+    expr: |
+      sum(increase({{selector:system_net_http_http11_connections_current_total}}[{{rateWindow}}]))
+    legend: system_net_http_http11_connections_current_total/min
+  - refId: C
+    expr: |
+      sum(increase({{selector:system_net_http_http20_connections_current_total}}[{{rateWindow}}]))
+    legend: system_net_http_http20_connections_current_total/min
+  - refId: D
+    expr: |
+      sum(increase({{selector:system_net_http_requests_started_total}}[{{rateWindow}}]))
+    legend: system_net_http_requests_started_total/min
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - __systemRef: hideSeriesFrom
+        matcher:
+          id: byNames
+          options:
+            mode: exclude
+            names:
+            - system_net_http_current_requests/min
+            - system_net_http_http11_connections_current_total/min
+            - system_net_http_http20_connections_current_total/min
+            prefix: 'All except:'
+            readOnly: true
+        properties:
+        - id: custom.hideFrom
+          value:
+            legend: false
+            tooltip: true
+            viz: true
+- id: panel-78
+  title: http fail
+  description: http fail — imported from dotnet runtime 1, panel 78.
+  order: 50
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_net_http_requests_failed_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:system_net_http_requests_failed_total}}[{{rateWindow}}]))
+    legend: system_net_http_requests_failed_total/min
+  visualization:
+    type: timeseries
+    width: 12
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-111
+  title: grpc_requests_received_total / min
+  description: grpc_requests_received_total / min — imported from dotnet runtime 1, panel 111.
+  order: 60
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - grpc_requests_received_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(increase({{selector:grpc_requests_received_total}}[{{rateWindow}}]))
+    legend: system_net_http_current_requests/min
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []
+- id: panel-89
+  title: process_open_handles (open files)
+  description: process_open_handles (open files) — imported from dotnet runtime 1, panel 89.
+  order: 70
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - process_open_handles
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:process_open_handles}})
+    legend: process_open_handles
+  visualization:
+    type: timeseries
+    width: 6
+    height: 256
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides: []

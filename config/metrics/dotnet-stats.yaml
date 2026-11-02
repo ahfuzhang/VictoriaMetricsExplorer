@@ -1,0 +1,208 @@
+# Imported from: dotnet runtime 1-1791858064252.json
+# Scope variables are supplied by Explorer; fixed matchers and panel settings are preserved.
+apiVersion: 1
+category:
+  id: dotnet-stats
+  title: .NET · Stats
+  description: dashboard to show metrics who use DotNet open telemetry collector
+  order: 60
+charts:
+- id: panel-29
+  title: process_start_time
+  description: process_start_time_seconds is a unix timestamp of process start.
+  order: 0
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - process_start_time_seconds
+  queries:
+  - refId: A
+    expr: |
+      time()-min({{selector:process_start_time_seconds}})
+    instant: true
+  visualization:
+    type: stat
+    width: 6
+    height: 128
+    options:
+      colorMode: value
+      graphMode: area
+      justifyMode: auto
+      orientation: auto
+      percentChangeColorMode: standard
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      showPercentChange: false
+      textMode: auto
+      wideLayout: true
+    fieldConfig:
+      defaults:
+        unit: s
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: thresholds
+      overrides: []
+- id: panel-109
+  title: pod count
+  description: process_start_time_seconds is a unix timestamp of process start.
+  order: 10
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - process_start_time_seconds
+  queries:
+  - refId: A
+    expr: |
+      count(count by ({{label:pod}})({{selector:process_start_time_seconds}}))
+    legend: pod count
+    instant: true
+  visualization:
+    type: stat
+    width: 6
+    height: 128
+    options:
+      colorMode: value
+      graphMode: area
+      justifyMode: auto
+      orientation: auto
+      percentChangeColorMode: standard
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      showPercentChange: false
+      textMode: auto
+      wideLayout: true
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: thresholds
+      overrides: []
+- id: panel-110
+  title: core count per pod
+  description: core count per pod — imported from dotnet runtime 1, panel 110.
+  order: 20
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - kube_pod_container_resource_limits
+  selectors:
+    kube_pod_container_resource_limits_filtered:
+      metricName: kube_pod_container_resource_limits
+      matchers:
+      - label: resource
+        op: '='
+        value: cpu
+  queries:
+  - refId: A
+    expr: |
+      max({{selector:kube_pod_container_resource_limits_filtered}})
+    legend: pod count
+    instant: true
+  visualization:
+    type: stat
+    width: 6
+    height: 128
+    options:
+      colorMode: value
+      graphMode: area
+      justifyMode: auto
+      orientation: auto
+      percentChangeColorMode: standard
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      showPercentChange: false
+      textMode: auto
+      wideLayout: true
+    fieldConfig:
+      defaults:
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: thresholds
+      overrides: []
+- id: panel-91
+  title: memory per pod
+  description: memory per pod — imported from dotnet runtime 1, panel 91.
+  order: 30
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - kube_pod_container_resource_limits
+  selectors:
+    kube_pod_container_resource_limits_filtered:
+      metricName: kube_pod_container_resource_limits
+      matchers:
+      - label: resource
+        op: '='
+        value: memory
+  queries:
+  - refId: A
+    expr: |
+      max({{selector:kube_pod_container_resource_limits_filtered}})
+    legend: pod count
+    instant: true
+  visualization:
+    type: stat
+    width: 6
+    height: 128
+    options:
+      colorMode: value
+      graphMode: area
+      justifyMode: auto
+      orientation: auto
+      percentChangeColorMode: standard
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      showPercentChange: false
+      textMode: auto
+      wideLayout: true
+    fieldConfig:
+      defaults:
+        unit: decbits
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: thresholds
+      overrides: []

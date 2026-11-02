@@ -1,0 +1,395 @@
+# Imported from: dotnet runtime 1-1791858064252.json
+# Scope variables are supplied by Explorer; fixed matchers and panel settings are preserved.
+apiVersion: 1
+category:
+  id: dotnet-memory
+  title: .NET · Memory
+  description: dashboard to show metrics who use DotNet open telemetry collector
+  order: 20
+charts:
+- id: panel-90
+  title: Memory type proportion
+  description: Memory type proportion — imported from dotnet runtime 1, panel 90.
+  order: 0
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - process_num_threads
+    - process_working_set_bytes
+    - system_runtime_gen_0_size
+    - system_runtime_gen_1_size
+    - system_runtime_gen_2_size
+    - system_runtime_loh_size
+    - system_runtime_poh_size
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:system_runtime_gen_0_size}})
+    legend: gen_0 (Small Object Heap)
+    instant: true
+  - refId: B
+    expr: |
+      sum({{selector:system_runtime_gen_1_size}})
+    legend: gen_1 (Small Object Heap)
+    instant: true
+  - refId: C
+    expr: |
+      sum({{selector:system_runtime_gen_2_size}})
+    legend: gen_2 (Small Object Heap)
+    instant: true
+  - refId: D
+    expr: |
+      sum({{selector:system_runtime_loh_size}})
+    legend: Large Object Heap
+    instant: true
+  - refId: E
+    expr: |
+      sum({{selector:system_runtime_poh_size}})
+    legend: Pinned Object Heap
+    instant: true
+  - refId: F
+    expr: |
+      sum({{selector:process_working_set_bytes}}) - sum({{selector:system_runtime_poh_size}}) - sum({{selector:system_runtime_loh_size}}) - sum({{selector:system_runtime_gen_0_size}}) - sum({{selector:system_runtime_gen_1_size}}) - sum({{selector:system_runtime_gen_2_size}})- sum({{selector:process_num_threads}})*1024*1024
+    legend: Other
+    instant: true
+  - refId: G
+    expr: |
+      sum({{selector:process_num_threads}})*1024*1024
+    legend: thread stack size
+    instant: true
+  visualization:
+    type: piechart
+    width: 12
+    height: 288
+    options:
+      displayLabels:
+      - name
+      - value
+      legend:
+        displayMode: table
+        placement: right
+        showLegend: true
+        values:
+        - percent
+        - value
+      pieType: donut
+      reduceOptions:
+        calcs:
+        - lastNotNull
+        fields: ''
+        values: false
+      sort: desc
+      tooltip:
+        hideZeros: false
+        mode: multi
+        sort: asc
+    fieldConfig:
+      defaults:
+        unit: bytes
+        color:
+          mode: palette-classic
+          fixedColor: '#73BF69'
+        custom:
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+      overrides: []
+- id: panel-60
+  title: memory
+  description: memory — imported from dotnet runtime 1, panel 60.
+  order: 10
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - dotnet_total_memory_bytes
+    - process_private_memory_bytes
+    - process_virtual_memory_bytes
+    - process_working_set_bytes
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:dotnet_total_memory_bytes}})
+    legend: dotnet_total_memory_bytes(Known allocated Mem)
+  - refId: B
+    expr: |
+      sum({{selector:process_private_memory_bytes}})
+    legend: process_private_memory_bytes
+  - refId: C
+    expr: |
+      sum({{selector:process_virtual_memory_bytes}})
+    legend: process_virtual_memory_bytes
+  - refId: D
+    expr: |
+      sum({{selector:process_working_set_bytes}})
+    legend: process_working_set_bytes(Physical momery)
+  visualization:
+    type: timeseries
+    width: 6
+    height: 288
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - __systemRef: hideSeriesFrom
+        matcher:
+          id: byNames
+          options:
+            mode: exclude
+            names:
+            - dotnet_total_memory_bytes(Known allocated Mem)
+            - process_private_memory_bytes
+            - process_working_set_bytes(Physical momery)
+            prefix: 'All except:'
+            readOnly: true
+        properties:
+        - id: custom.hideFrom
+          value:
+            legend: false
+            tooltip: true
+            viz: true
+- id: panel-61
+  title: runtime_alloc/s
+  description: 自应用程序启动以来，.NET GC 托管堆上累计分配的内存总量（字节数）。
+  order: 20
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_alloc_total
+  rateWindow: 1m
+  queries:
+  - refId: A
+    expr: |
+      sum(rate({{selector:system_runtime_alloc_total}}[{{rateWindow}}]))
+    legend: runtime_alloc/s
+  visualization:
+    type: timeseries
+    width: 6
+    height: 288
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - __systemRef: hideSeriesFrom
+        matcher:
+          id: byNames
+          options:
+            mode: exclude
+            names:
+            - runtime_alloc/s
+            prefix: 'All except:'
+            readOnly: true
+        properties:
+        - id: custom.hideFrom
+          value:
+            legend: false
+            tooltip: true
+            viz: true
+- id: panel-72
+  title: Heap
+  description: Heap — imported from dotnet runtime 1, panel 72.
+  order: 30
+  language: promql
+  match:
+    modes:
+    - byPod
+    metricNames:
+    - system_runtime_gc_committed
+    - system_runtime_gc_heap_size
+    - system_runtime_loh_size
+    - system_runtime_poh_size
+    - system_runtime_working_set
+  queries:
+  - refId: A
+    expr: |
+      sum({{selector:system_runtime_loh_size}})
+    legend: Large Object Heap
+  - refId: B
+    expr: |
+      sum({{selector:system_runtime_gc_heap_size}})
+    legend: gc_heap_size
+  - refId: C
+    expr: |
+      sum({{selector:system_runtime_poh_size}})
+    legend: Pinned Object Heap
+  - refId: D
+    expr: |
+      sum({{selector:system_runtime_working_set}})
+    legend: system_runtime_working_set
+  - refId: E
+    expr: |
+      sum({{selector:system_runtime_gc_committed}})
+    legend: system_runtime_gc_committed
+  visualization:
+    type: timeseries
+    width: 6
+    height: 288
+    options:
+      legend:
+        calcs: []
+        displayMode: list
+        placement: bottom
+        showLegend: true
+      tooltip:
+        hideZeros: false
+        mode: single
+        sort: none
+    fieldConfig:
+      defaults:
+        unit: bytes
+        thresholds:
+          mode: absolute
+          steps:
+          - value: 0
+            color: green
+          - value: 80
+            color: red
+        color:
+          mode: palette-classic
+        custom:
+          axisBorderShow: false
+          axisCenteredZero: false
+          axisColorMode: text
+          axisLabel: ''
+          axisPlacement: auto
+          barAlignment: 0
+          barWidthFactor: 0.6
+          drawStyle: line
+          fillOpacity: 0
+          gradientMode: none
+          hideFrom:
+            legend: false
+            tooltip: false
+            viz: false
+          insertNulls: false
+          lineInterpolation: linear
+          lineWidth: 1
+          pointSize: 5
+          scaleDistribution:
+            type: linear
+          showPoints: auto
+          showValues: false
+          spanNulls: false
+          stacking:
+            group: A
+            mode: none
+          thresholdsStyle:
+            mode: 'off'
+      overrides:
+      - __systemRef: hideSeriesFrom
+        matcher:
+          id: byNames
+          options:
+            mode: exclude
+            names:
+            - Large Object Heap
+            prefix: 'All except:'
+            readOnly: true
+        properties:
+        - id: custom.hideFrom
+          value:
+            legend: false
+            tooltip: true
+            viz: true

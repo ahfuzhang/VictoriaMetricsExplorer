@@ -42,7 +42,7 @@ proto: ## Generate Go (pkg/proto) and TypeScript (src/generated) code from proto
 		--go_out=. --go_opt=module=github.com/ahfuzhang/victoriametricsexplorer \
 		--plugin=protoc-gen-es=node_modules/.bin/protoc-gen-es \
 		--es_out=src/generated --es_opt=target=ts,import_extension=none \
-		proto/explorer/explorer.proto
+		proto/explorer/explorer.proto proto/explorer/metric_config.proto
 	@# Backend-only messages (cache entries): Go code only.
 	protoc -I proto \
 		--go_out=. --go_opt=module=github.com/ahfuzhang/victoriametricsexplorer \

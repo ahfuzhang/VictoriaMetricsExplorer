@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
 
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/metricconfig"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
@@ -31,7 +33,14 @@ const (
 
 // Manage starts the app plugin.
 func Manage(pluginID string) error {
-	return app.Manage(pluginID, NewApp, app.ManageOpts{})
+	catalog, err := metricconfig.Load(os.Getenv(metricconfig.EnvDir))
+	if err != nil {
+		return err
+	}
+	log.DefaultLogger.Info("metric chart configuration loaded", "enabled", catalog.Enabled, "files", len(catalog.Files))
+	return app.Manage(pluginID, func(ctx context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
+		return newConfiguredApp(ctx, settings, catalog)
+	}, app.ManageOpts{})
 }
 
 // App is the backend instance of the VictoriaMetrics Explorer app plugin. It is the only
@@ -61,10 +70,15 @@ const serviceAccountTokenKey = "serviceAccountToken"
 // NewApp creates a new app instance. Grafana creates one per organization, with that
 // organization's settings.
 func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
+	return newConfiguredApp(context.Background(), settings, nil)
+}
+
+func newConfiguredApp(_ context.Context, settings backend.AppInstanceSettings, catalog *metricconfig.Catalog) (instancemgmt.Instance, error) {
 	s, err := ParseSettings(settings)
 	if err != nil {
 		return nil, err
 	}
+	s.MetricCatalog = catalog
 	// A configured token wins over the managed service account: it is the admin's explicit choice,
 	// and the managed account would act in org 1 whatever organization this instance serves.
 	if token := strings.TrimSpace(settings.DecryptedSecureJSONData[serviceAccountTokenKey]); token != "" {

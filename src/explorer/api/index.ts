@@ -30,7 +30,7 @@ import {
 } from '../../generated/explorer/explorer_pb';
 import { callProto, labelFilters, rangeFromProto, schemaFromProto, timeRange } from './proto';
 
-export { describeError } from './describeError';
+export { backendError, describeError } from './describeError';
 
 // ============================================================================
 // Types
@@ -848,7 +848,7 @@ export interface RangeQueryResult {
  */
 export async function queryRange(
   uid: string,
-  params: { expr: string; step: string; range: TimeRange; abortSignal?: AbortSignal }
+  params: { expr: string; step: string; range: TimeRange; instant?: boolean; abortSignal?: AbortSignal }
 ): Promise<RangeQueryResult> {
   // Callers show the error in place, so no Grafana error toast.
   return runRangeQuery(uid, params, false);
@@ -865,7 +865,7 @@ export async function queryChartData(
 
 async function runRangeQuery(
   uid: string,
-  params: { expr: string; step: string; range: TimeRange; abortSignal?: AbortSignal },
+  params: { expr: string; step: string; range: TimeRange; instant?: boolean; abortSignal?: AbortSignal },
   showErrorAlert: boolean | undefined
 ): Promise<RangeQueryResult> {
   const pb = await callProto({
@@ -879,6 +879,7 @@ async function runRangeQuery(
         range: timeRange(params.range.from.valueOf(), params.range.to.valueOf()),
         step: params.step,
         maxDataPoints: CHART_MAX_DATA_POINTS,
+        instant: params.instant,
       },
     },
     showErrorAlert,

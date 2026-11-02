@@ -4,6 +4,11 @@
 
 ### Added
 
+- YAML-driven Important Metrics under By Pod, loaded once from `VMX_METRIC_CONFIG_DIR`, with scoped
+  MetricsQL templates and native Grafana panel settings. Includes all 45 panels / 83 queries from
+  the .NET runtime dashboard in seven category files, including stat, donut, stacked and dual-axis panels
+- A Grafana v2 dashboard importer (`scripts/import_metric_dashboard.py`) and instant query support
+  for configured panels, preserving query legends, fixed label matchers and field overrides
 - Per-user favorites kept on the Grafana server (User Storage API), restored in any browser after
   signing in: a menu of folders and favorites, each favorite holding up to 20 saved queries of 1–10
   statements (expression, datasource, unit, visualization and the browse source they came from)
@@ -38,6 +43,14 @@
 
 ### Changed
 
+- The metric name search (column 2) takes a regular expression (RE2, case-insensitive, matched
+  anywhere in the name, so a plain name fragment finds the same names as before). A collapsed
+  histogram is found through its member names too (`..._seconds_sum`), but no longer by a pattern
+  that matches a member suffix on its own (`_bucket`, `count$`), which listed every histogram under
+  names the pattern does not match. metric-index
+  rejects an invalid `search` with 400 `invalid_search`, shown under the search box. By Pod, By
+  Node and By Name have a regular expression filter for their pod prefixes, node names and metric
+  name prefixes
 - Refresh moves a relative time range ("last 1 hour") to the current time
 - metric-index caches one list of metric names per scope (a metric name prefix, a pod group or a
   node) and day-aligned range, instead of one response per page and search: paging, searching and
@@ -57,6 +70,8 @@
 
 ### Fixed
 
+- Imported Important Metrics now match Prometheus datasources as well as VictoriaMetrics.
+  Implicit rate/increase windows are made explicit in YAML instead of marking all panels MetricsQL-only
 - By Pod puts every GitLab Runner job pod (`runner-<token>-project-<id>-concurrent-<n>-<random>`)
   in one `runner` group, instead of one group per runner token and project
 

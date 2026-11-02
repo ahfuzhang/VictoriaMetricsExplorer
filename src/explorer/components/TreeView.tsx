@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { GrafanaTheme2, TimeRange } from '@grafana/data';
-import { Alert, IconButton, LoadingPlaceholder, useStyles2 } from '@grafana/ui';
+import { Alert, IconButton, Input, LoadingPlaceholder, useStyles2 } from '@grafana/ui';
 import { css } from '@emotion/css';
 
 import { fetchMetricIndex, fetchNodeGroups, fetchPodGroups, describeError, PodGroup } from '../api';
@@ -15,6 +15,7 @@ interface Props {
   collapsed: boolean;
   onScopeChange: (scope: MetricScope) => void;
   onToggleCollapsed: () => void;
+  onPodMode?: () => void;
 }
 
 interface GroupItem {
@@ -29,6 +30,7 @@ export const TreeView: React.FC<Props> = ({
   collapsed,
   onScopeChange,
   onToggleCollapsed,
+  onPodMode,
 }) => {
   const styles = useStyles2(getStyles);
   // While a favorite is open, no browse scope is highlighted; picking one returns to browsing.
@@ -165,6 +167,10 @@ export const TreeView: React.FC<Props> = ({
     };
   }, [datasourceUID, timeRange, nodesRequested]);
 
+  const podFilter = useRegexFilter(podGroups, itemName);
+  const nodeFilter = useRegexFilter(nodes, nodeName);
+  const groupFilter = useRegexFilter(groups, itemName);
+
   return (
     <nav
       className={`${styles.container} ${collapsed ? styles.containerCollapsed : ''}`}
@@ -198,6 +204,7 @@ export const TreeView: React.FC<Props> = ({
                 onClick={() => {
                   setPodsExpanded((expanded) => !expanded);
                   setPodsRequested(true);
+                  onPodMode?.();
                 }}
               >
                 <span className={styles.chevron}>{podsExpanded ? '▾' : '▸'}</span>
@@ -209,6 +216,12 @@ export const TreeView: React.FC<Props> = ({
 
               {podsExpanded && (
                 <div className={styles.children} role="group">
+                  <BranchFilter
+                    label="Filter pod prefixes by regular expression"
+                    placeholder="Regex, e.g. ^api-"
+                    filter={podFilter}
+                    styles={styles}
+                  />
                   {podsLoading && (
                     <div className={styles.loading}>
                       <LoadingPlaceholder text="Loading pods…" />
@@ -217,8 +230,11 @@ export const TreeView: React.FC<Props> = ({
                   {!podsLoading && podGroups.length === 0 && !podsError && (
                     <div className={styles.empty}>No series carry a “{podLabel}” label.</div>
                   )}
+                  {!podsLoading && podGroups.length > 0 && podFilter.visible.length === 0 && (
+                    <div className={styles.empty}>No pod prefix matches “{podFilter.pattern}”.</div>
+                  )}
                   {!podsLoading &&
-                    podGroups.map((group) => (
+                    podFilter.visible.map((group) => (
                       <TreeLeaf
                         key={group.name}
                         label={group.name}
@@ -252,6 +268,12 @@ export const TreeView: React.FC<Props> = ({
 
               {nodesExpanded && (
                 <div className={styles.children} role="group">
+                  <BranchFilter
+                    label="Filter nodes by regular expression"
+                    placeholder="Regex, e.g. ^worker-"
+                    filter={nodeFilter}
+                    styles={styles}
+                  />
                   {nodesLoading && (
                     <div className={styles.loading}>
                       <LoadingPlaceholder text="Loading nodes…" />
@@ -260,8 +282,11 @@ export const TreeView: React.FC<Props> = ({
                   {!nodesLoading && nodes.length === 0 && !nodesError && (
                     <div className={styles.empty}>No series carry a “{nodeLabel}” label.</div>
                   )}
+                  {!nodesLoading && nodes.length > 0 && nodeFilter.visible.length === 0 && (
+                    <div className={styles.empty}>No node matches “{nodeFilter.pattern}”.</div>
+                  )}
                   {!nodesLoading &&
-                    nodes.map((node) => (
+                    nodeFilter.visible.map((node) => (
                       <TreeLeaf
                         key={node}
                         label={node}
@@ -291,6 +316,13 @@ export const TreeView: React.FC<Props> = ({
 
               {metricsExpanded && (
                 <div className={styles.children} role="group">
+                  <BranchFilter
+                    label="Filter metric prefixes by regular expression"
+                    placeholder="Regex, e.g. ^go"
+                    filter={groupFilter}
+                    styles={styles}
+                  />
+                  {/* All metrics is not a prefix, so the filter leaves it in place. */}
                   <TreeLeaf
                     label="All metrics"
                     count={metricCount}
@@ -303,8 +335,11 @@ export const TreeView: React.FC<Props> = ({
                       <LoadingPlaceholder text="Loading groups…" />
                     </div>
                   )}
+                  {!loading && groups.length > 0 && groupFilter.visible.length === 0 && (
+                    <div className={styles.empty}>No metric prefix matches “{groupFilter.pattern}”.</div>
+                  )}
                   {!loading &&
-                    groups.map((group) => (
+                    groupFilter.visible.map((group) => (
                       <TreeLeaf
                         key={group.name}
                         label={group.name}
@@ -352,6 +387,61 @@ export const TreeView: React.FC<Props> = ({
     </nav>
   );
 };
+
+/** Compiles a case-insensitive filter; returns null for an empty or invalid pattern. */
+const compileFilter = (pattern: string): RegExp | null => {
+  if (pattern === '') {
+    return null;
+  }
+  try {
+    return new RegExp(pattern, 'i');
+  } catch {
+    return null;
+  }
+};
+
+const itemName = (item: { name: string }) => item.name;
+const nodeName = (node: string) => node;
+
+interface RegexFilter<T> {
+  pattern: string;
+  setPattern: (pattern: string) => void;
+  visible: T[];
+  invalid: boolean;
+}
+
+/** Filters a branch's leaves by a regular expression typed above them. */
+function useRegexFilter<T>(items: T[], name: (item: T) => string): RegexFilter<T> {
+  const [pattern, setPattern] = useState('');
+  // An invalid pattern leaves the list unfiltered and flags the input instead of hiding everything.
+  const regExp = useMemo(() => compileFilter(pattern), [pattern]);
+  const visible = useMemo(
+    () => (regExp ? items.filter((item) => regExp.test(name(item))) : items),
+    [items, regExp, name]
+  );
+  return { pattern, setPattern, visible, invalid: pattern !== '' && regExp === null };
+}
+
+interface BranchFilterProps {
+  label: string;
+  placeholder: string;
+  filter: RegexFilter<unknown>;
+  styles: ReturnType<typeof getStyles>;
+}
+
+const BranchFilter: React.FC<BranchFilterProps> = ({ label, placeholder, filter, styles }) => (
+  <div className={styles.filter}>
+    <Input
+      aria-label={label}
+      placeholder={placeholder}
+      value={filter.pattern}
+      onChange={(event) => filter.setPattern(event.currentTarget.value)}
+      prefix={<span aria-hidden="true">⌕</span>}
+      invalid={filter.invalid}
+    />
+    {filter.invalid && <div className={styles.filterError}>Invalid regular expression</div>}
+  </div>
+);
 
 interface TreeLeafProps {
   label: string;
@@ -519,6 +609,14 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.text.secondary,
     fontSize: theme.typography.size.xs,
     fontVariantNumeric: 'tabular-nums',
+  }),
+  filter: css({
+    padding: theme.spacing(0.5, 0, 0.5, 0.25),
+  }),
+  filterError: css({
+    marginTop: theme.spacing(0.25),
+    color: theme.colors.error.text,
+    fontSize: theme.typography.size.xs,
   }),
   loading: css({
     padding: theme.spacing(1),

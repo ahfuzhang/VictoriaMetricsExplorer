@@ -15,6 +15,7 @@ import { TreeView } from './TreeView';
 import { MetricList } from './MetricList';
 import { FacetPanel } from './FacetPanel';
 import { ChartPanel, type ChartSnapshot } from './ChartPanel';
+import { ImportantMetrics } from '../important/ImportantMetrics';
 
 interface Props {
   datasourceUID: string;
@@ -161,6 +162,8 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
 
   const [scope, setScope] = useState<MetricScope>({ kind: 'all' });
   const [selectedMetric, setSelectedMetric] = useState('');
+  const [byPodMode, setByPodMode] = useState(false);
+  const [importantMetricsSelected, setImportantMetricsSelected] = useState(false);
   const [filters, setFilters] = useState<SelectedFilters>({});
   // Labels the chart is summed by, picked under it from the labels the filters leave groupable.
   const [groupBy, setGroupBy] = useState<string[]>([]);
@@ -182,6 +185,8 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
     setGroupBy([]);
     setGroupable(null);
     setScope({ kind: 'all' });
+    setByPodMode(false);
+    setImportantMetricsSelected(false);
   }, [datasourceUID]);
 
   useEffect(() => {
@@ -203,6 +208,7 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
   }, [activeSeparator]);
 
   const handleMetricSelect = useCallback((metric: string) => {
+    setImportantMetricsSelected(false);
     setSelectedMetric(metric);
     setFilters({});
     setGroupBy([]);
@@ -213,6 +219,8 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
     (nextScope: MetricScope) => {
       exitSavedMode();
       setScope(nextScope);
+      setByPodMode(nextScope.kind === 'pod');
+      setImportantMetricsSelected(false);
       setSelectedMetric('');
       setFilters({});
       setGroupBy([]);
@@ -476,6 +484,9 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
           timeRange={timeRange}
           refreshKey={refreshKey}
           onSelectMetric={handleMetricSelect}
+          showImportantMetrics={byPodMode}
+          importantMetricsSelected={importantMetricsSelected}
+          onSelectImportantMetrics={() => setImportantMetricsSelected(true)}
         />
       </section>
 
@@ -539,6 +550,39 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
     </>
   );
 
+  const importantColumns = (
+    <>
+      <section ref={metricsColumnRef} className={styles.column} aria-label="Metric names">
+        <MetricList
+          datasourceUID={datasourceUID}
+          capabilities={capabilities}
+          selectedMetric=""
+          scope={scope}
+          timeRange={timeRange}
+          refreshKey={refreshKey}
+          onSelectMetric={handleMetricSelect}
+          showImportantMetrics
+          importantMetricsSelected
+          onSelectImportantMetrics={() => setImportantMetricsSelected(true)}
+        />
+      </section>
+      {separator(1)}
+      <section className={`${styles.column} ${styles.savedChartsColumn}`} aria-label="Important Metrics">
+        <ImportantMetrics
+          key={`${datasourceUID}:${podGroup ?? ''}`}
+          datasourceUID={datasourceUID}
+          podGroup={podGroup ?? ''}
+          filters={filters}
+          timeRange={timeRange}
+          step={step}
+          refreshKey={refreshKey}
+          maxConcurrentRequests={capabilities.maxConcurrentRequests}
+          onClearFilters={() => setFilters({})}
+        />
+      </section>
+    </>
+  );
+
   // The query list keeps the metric names' track; the charts span the label and visualization
   // tracks, so the widths set while browsing still apply.
   const savedColumns = (
@@ -570,12 +614,16 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
             collapsed={treeCollapsed}
             onScopeChange={handleScopeChange}
             onToggleCollapsed={toggleTreeCollapsed}
+            onPodMode={() => {
+              handleScopeChange({ kind: 'all' });
+              setByPodMode(true);
+            }}
           />
         </section>
 
         {separator(0)}
 
-        {savedMode ? savedColumns : browseColumns}
+        {savedMode ? savedColumns : importantMetricsSelected && byPodMode ? importantColumns : browseColumns}
       </div>
     </div>
   );

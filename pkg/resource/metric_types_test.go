@@ -400,6 +400,57 @@ func TestMetricIndexServesEveryRequestOfAScopeFromOneFetch(t *testing.T) {
 	}
 }
 
+func TestMetricIndexSearchIsACaseInsensitiveRegexp(t *testing.T) {
+	h, calls := newHarness(t, []string{
+		"apisix_etcd_reachable", "apisix_http_requests_total",
+		"apisix_latency_seconds_bucket", "apisix_latency_seconds_count", "apisix_latency_seconds_sum",
+		"apisix_retries_count", "go_goroutines", "up",
+	}, nil)
+	names := func(search string) []string {
+		resp := postMetricIndex(t, h, &explorerpb.MetricIndexRequest{Search: search, Range: fixedRange})
+		out := make([]string, 0, len(resp.Metrics))
+		for _, m := range resp.Metrics {
+			out = append(out, m.Name)
+		}
+		return out
+	}
+
+	for search, want := range map[string][]string{
+		"":                       {"apisix_etcd_reachable", "apisix_http_requests_total", "apisix_latency_seconds", "apisix_retries_count", "go_goroutines", "up"},
+		"goroutines":             {"go_goroutines"},
+		"^APISIX_.*_total$":      {"apisix_http_requests_total"},
+		"^(up|go_.+)$":           {"go_goroutines", "up"},
+		"latency_seconds_count$": {"apisix_latency_seconds"},
+		"LATENCY_SECONDS_SUM":    {"apisix_latency_seconds"},
+		"seconds_":               {"apisix_latency_seconds"},
+		`^apisix_\w+_reachable$`: {"apisix_etcd_reachable"},
+		"^nothing$":              {},
+		// A pattern that matches a member suffix on its own would list every histogram.
+		"_count$":    {"apisix_retries_count"},
+		"count":      {"apisix_retries_count"},
+		"_bucket":    {},
+		".*_sum$":    {},
+		"bucket|^up": {"up"},
+	} {
+		if got := names(search); !slices.Equal(got, want) {
+			t.Errorf("search %q: got %v, want %v", search, got, want)
+		}
+	}
+
+	before := calls.labelValues.Load()
+	rec := httptest.NewRecorder()
+	h.handleMetricIndex(rec, postProto(t, "/explorer/v1/metric-index", &explorerpb.MetricIndexRequest{Search: "apisix_["}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid search: status %d, want 400", rec.Code)
+	}
+	if e := decodeError(t, rec); e.Code != "invalid_search" || e.Message != "missing closing ]: `[`" {
+		t.Errorf("invalid search: got %s: %s", e.Code, e.Message)
+	}
+	if calls.labelValues.Load() != before {
+		t.Error("an invalid search must not reach the datasource")
+	}
+}
+
 func TestMetricTypesWritesBackIntoTheMetricIndexList(t *testing.T) {
 	h, calls := newHarness(t, []string{
 		"apisix_etcd_reachable", "apisix_http_requests_total", "apisix_idle",

@@ -13,6 +13,16 @@ function stringify(value: unknown): string {
   }
 }
 
+/** The app backend's `{ code, message }` of a failed request, or undefined when it sent none. */
+export function backendError(err: unknown): { code: string; message: string } | undefined {
+  const data = (err as { data?: unknown } | null)?.data;
+  if (!data || typeof data !== 'object') {
+    return undefined;
+  }
+  const { code, message } = data as Record<string, unknown>;
+  return typeof code === 'string' && typeof message === 'string' ? { code, message } : undefined;
+}
+
 /**
  * Turn whatever a failed request throws into readable text that says what failed and where.
  *
