@@ -83,6 +83,8 @@ type Config struct {
 
 	// Credentials supplies the Grafana URL and service-account token. Defaults to GrafanaCredentials.
 	Credentials CredentialsFunc
+	// ForwardOAuth selects the datasource proxy in the current user's Grafana session.
+	ForwardOAuth bool
 
 	// Label mappings
 	PodLabel       string
@@ -183,6 +185,15 @@ func (c *Client) Observability() *observability.Observability {
 
 const datasourceProxyPath = "/api/datasources/proxy/uid/"
 
+type sessionProxyKey struct{}
+type sessionProxy func(context.Context, string) (*http.Response, error)
+
+// WithSessionProxy supplies the request transport for an OAuth datasource. Paths are relative
+// to Grafana and include the configured datasource UID.
+func WithSessionProxy(ctx context.Context, proxy sessionProxy) context.Context {
+	return context.WithValue(ctx, sessionProxyKey{}, proxy)
+}
+
 // BuildURL constructs the Grafana datasource-proxy URL for an upstream API path and its encoded
 // query string. Only the Grafana base URL and the configured datasource UID are used — user input
 // never overrides them, so the plugin cannot be pointed at an arbitrary host.
@@ -201,38 +212,21 @@ func (c *Client) BuildURL(baseURL, apiPath string, query []byte) string {
 	return bytesutil.ToUnsafeString(b)
 }
 
-// Do executes an HTTP request against the datasource proxy with the service-account token,
-// size limits, and error mapping. query is the encoded query string, built with appendQueryParam
-// and appendIntParam.
+// Do executes an HTTP request against the datasource proxy. query is the encoded query string,
+// built with appendQueryParam and appendIntParam.
 func (c *Client) Do(ctx context.Context, method, apiPath string, query []byte, body io.Reader) (*http.Response, error) {
-	baseURL, token, err := c.config.Credentials(ctx)
-	if err != nil {
-		c.obs.RecordUpstreamRequest(0, "error")
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, c.BuildURL(baseURL, apiPath, query), body)
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-
 	started := time.Now()
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.request(ctx, method, apiPath, query, body)
 	elapsed := time.Since(started)
-
 	if err != nil {
 		c.obs.RecordUpstreamRequest(elapsed, "error")
 		return nil, fmt.Errorf("request %s: %w", apiPath, err)
 	}
-
 	status := "success"
 	if resp.StatusCode >= 400 {
 		status = "error"
 	}
 	c.obs.RecordUpstreamRequest(elapsed, status)
-
 	return resp, nil
 }
 
@@ -257,7 +251,36 @@ func (c *Client) doOK(ctx context.Context, method, apiPath string, query []byte)
 		StatusCode: resp.StatusCode,
 		Body:       TruncateBody(body, 512),
 		Path:       apiPath,
+		viaSession: c.config.ForwardOAuth,
 	}
+}
+
+func (c *Client) request(ctx context.Context, method, apiPath string, query []byte, body io.Reader) (*http.Response, error) {
+	if c.config.ForwardOAuth {
+		proxy, ok := ctx.Value(sessionProxyKey{}).(sessionProxy)
+		if !ok {
+			return nil, errors.New("datasource requires the current Grafana OAuth session")
+		}
+		if method != http.MethodGet || body != nil {
+			return nil, errors.New("the session proxy only supports GET")
+		}
+		ctx, cancel := context.WithTimeout(ctx, c.config.Timeout)
+		defer cancel()
+		return proxy(ctx, c.BuildURL("", apiPath, query))
+	}
+	baseURL, token, err := c.config.Credentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.BuildURL(baseURL, apiPath, query), body)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+
+	return c.httpClient.Do(req)
 }
 
 // doJSON is a helper that executes a request and decodes the JSON response
@@ -288,7 +311,8 @@ type UpstreamError struct {
 	StatusCode int
 	Body       string
 	// Path is the upstream API path that failed (e.g. /api/v1/labels); empty when unknown.
-	Path string
+	Path       string
+	viaSession bool
 }
 
 func (e *UpstreamError) Error() string {
@@ -296,11 +320,24 @@ func (e *UpstreamError) Error() string {
 	var head, tail string
 	withStatus := false
 	switch e.StatusCode {
+	case http.StatusBadRequest:
+		if e.Path != "" && e.Body == "Authentication to data source failed" {
+			// Grafana's datasource proxy maps an upstream 401 to this HTTP 400 response.
+			head = "the datasource rejected its upstream credentials (HTTP 401 reported by Grafana as HTTP 400)"
+			if e.viaSession {
+				head += "; sign in using the datasource's OAuth provider and check the datasource authentication settings"
+			}
+		} else {
+			head, withStatus = "upstream returned HTTP ", true
+		}
 	case http.StatusUnauthorized:
 		head = "grafana rejected the plugin service account (HTTP 401); check the token on the app's Configuration page, " +
 			"or that managed service accounts are enabled"
+		if e.viaSession {
+			head = "grafana rejected the current session (HTTP 401); sign in again"
+		}
 	case http.StatusForbidden:
-		head = "the plugin service account may not query this datasource (HTTP 403); it needs datasources:read and datasources:query"
+		head = "access denied (HTTP 403); check the Grafana datasources:query permission and the datasource authorization settings"
 	case http.StatusNotFound:
 		head = "datasource or endpoint not found (HTTP 404); check the datasource URL in Grafana"
 	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:

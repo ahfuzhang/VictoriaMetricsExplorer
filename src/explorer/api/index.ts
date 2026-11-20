@@ -28,9 +28,10 @@ import {
   SeriesRequestSchema,
   SeriesResponseSchema,
 } from '../../generated/explorer/explorer_pb';
-import { callProto, labelFilters, rangeFromProto, schemaFromProto, timeRange } from './proto';
+import { callProto, dsURL, labelFilters, rangeFromProto, RESOURCES, schemaFromProto, timeRange } from './proto';
 
 export { backendError, describeError } from './describeError';
+export { PLUGIN_ID } from './proto';
 
 // ============================================================================
 // Types
@@ -327,20 +328,6 @@ export interface DiagnosticsResponse {
 // Every backend call is protobuf + zstd in both directions (see ./proto.ts). Each fetcher maps the
 // decoded message onto the plain shapes above, so components never see protobuf types or bigints.
 // ============================================================================
-
-/** The Explorer app's ID; its backend is reached through Grafana's plugin resource proxy. */
-export const PLUGIN_ID = 'ahfuzhang-victoriametricsexplorer-app';
-
-const RESOURCES = `/api/plugins/${PLUGIN_ID}/resources/explorer/v1`;
-
-/**
- * Build the app backend URL for one supported datasource and Explorer endpoint, e.g.
- * dsURL('vm-uid', '/capabilities'). The backend reaches the datasource through Grafana with the
- * plugin's service account; the browser only ever names the datasource by UID.
- */
-function dsURL(uid: string, endpoint: string): string {
-  return `${RESOURCES}/ds/${encodeURIComponent(uid)}${endpoint}`;
-}
 
 /**
  * Get the Prometheus and VictoriaMetrics datasources the Explorer can use. The backend decides which ones exist

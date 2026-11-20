@@ -2,15 +2,84 @@ package resource
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
+
+func TestOAuthPodGroupsStayInTheirRequestSession(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("OAuth pod groups used the service account")
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(upstream.Close)
+	h := handlersFor(t, upstream, vmclient.Config{UID: "prom", ForwardOAuth: true})
+	c := cache.New(32 << 20)
+	t.Cleanup(c.Close)
+	h.router.cache = c.UncachedScope()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	release := make(chan struct{})
+	var calls [2]atomic.Int64
+	var sessions [2]context.Context
+	var ready [2]chan struct{}
+	var wg sync.WaitGroup
+	for i := range sessions {
+		ready[i] = make(chan struct{})
+		sessions[i] = vmclient.WithSessionProxy(ctx, func(ctx context.Context, path string) (*http.Response, error) {
+			if calls[i].Add(1) == 1 {
+				close(ready[i])
+			}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			body := fmt.Sprintf(`{"status":"success","data":["user%d-pod-0"]}`, i)
+			return &http.Response{StatusCode: 200, ContentLength: int64(len(body)), Body: io.NopCloser(strings.NewReader(body))}, nil
+		})
+		wg.Go(func() {
+			// Repeating the request must still fetch this user's values, without a shared cache.
+			for range 2 {
+				result, err := h.loadPodGroups(sessions[i], podGroupsTestStart, podGroupsTestEnd)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if names := groupNames(result); len(names) != 1 || names[0] != fmt.Sprintf("user%d-pod", i) {
+					t.Errorf("session %d received another user's groups: %v", i, names)
+				}
+			}
+		})
+	}
+	for _, started := range ready {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("concurrent users shared an in-flight request")
+		}
+	}
+	close(release)
+	wg.Wait()
+	for i := range calls {
+		if got := calls[i].Load(); got != int64(2*len(labelValueGroups)) {
+			t.Errorf("session %d fetched %d shards", i, got)
+		}
+	}
+	if h.podGroups.started || len(h.podGroups.used) != 0 || h.podGroups.baseCtx != nil {
+		t.Fatal("OAuth session retained for background refresh")
+	}
+}
 
 var (
 	podGroupsTestStart = time.UnixMilli(1700000000000)

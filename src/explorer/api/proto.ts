@@ -1,4 +1,4 @@
-import { getBackendSrv } from '@grafana/runtime';
+import { getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
 import { lastValueFrom } from 'rxjs';
 import {
   create,
@@ -17,6 +17,15 @@ import {
   type TimeRangeSchema,
 } from '../../generated/explorer/explorer_pb';
 import { zstdDecompress, zstdFrame } from './zstd';
+import { fetchWithOAuthSession } from './oauth';
+import { backendError } from './describeError';
+
+export const PLUGIN_ID = 'ahfuzhang-victoriametricsexplorer-app';
+export const RESOURCES = `/api/plugins/${PLUGIN_ID}/resources/explorer/v1`;
+
+export function dsURL(uid: string, endpoint: string): string {
+  return `${RESOURCES}/ds/${encodeURIComponent(uid)}${endpoint}`;
+}
 
 /**
  * The backend's wire format, in both directions: a protobuf message compressed with zstd
@@ -49,23 +58,51 @@ export async function callProto<Req extends DescMessage, Res extends DescMessage
     headers[ENCODING_HEADER] = 'zstd';
   }
 
-  let resp;
+  const datasourcePrefix = `${RESOURCES}/ds/`;
+  const uid = call.url.startsWith(datasourcePrefix) ? call.url.slice(datasourcePrefix.length).split('/')[0] : '';
+  const datasource = uid ? getDataSourceSrv().getInstanceSettings(decodeURIComponent(uid)) : undefined;
+  const settings = datasource?.jsonData as { oauthPassThru?: boolean } | undefined;
+  const forwardOAuth = settings?.oauthPassThru === true;
+  const sessionRequest = async () => {
+    const response = await fetchWithOAuthSession(call.url, `${RESOURCES}/oauth`, uid, {
+      method: call.method,
+      headers,
+      body: data,
+      signal: call.abortSignal,
+    });
+    if (response.status >= 400) {
+      throw withDecodedErrorBody(response);
+    }
+    return response.data;
+  };
+
+  let response: ArrayBuffer;
   try {
-    resp = await lastValueFrom(
-      getBackendSrv().fetch<ArrayBuffer>({
-        url: call.url,
-        method: call.method,
-        data,
-        headers,
-        responseType: 'arraybuffer',
-        showErrorAlert: call.showErrorAlert,
-        abortSignal: call.abortSignal,
-      })
-    );
+    response = forwardOAuth
+      ? await sessionRequest()
+      : (
+          await lastValueFrom(
+            getBackendSrv().fetch<ArrayBuffer>({
+              url: call.url,
+              method: call.method,
+              data,
+              headers,
+              responseType: 'arraybuffer',
+              showErrorAlert: call.showErrorAlert,
+              abortSignal: call.abortSignal,
+            })
+          )
+        ).data;
   } catch (err) {
-    throw withDecodedErrorBody(err);
+    const decoded = withDecodedErrorBody(err);
+    // The backend's datasource settings can be newer than Grafana's page settings.
+    if (!forwardOAuth && uid && backendError(decoded)?.code === 'oauth_session_required') {
+      response = await sessionRequest();
+    } else {
+      throw decoded;
+    }
   }
-  return fromBinary(call.response, zstdDecompress(new Uint8Array(resp.data)));
+  return fromBinary(call.response, zstdDecompress(new Uint8Array(response)));
 }
 
 /**

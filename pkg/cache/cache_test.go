@@ -32,6 +32,28 @@ func newTestCache(t *testing.T, maxBytes int) (*Cache, *clock) {
 	return c, clk
 }
 
+func TestUncachedScopeDoesNotStoreUserResults(t *testing.T) {
+	c, clk := newTestCache(t, 32<<20)
+	s := c.UncachedScope()
+	msg := wrapperspb.String("private result")
+	s.Set("key", msg)
+	s.SetWritten("other", msg, clk.now())
+	if c.Stats().Entries != 0 {
+		t.Fatal("OAuth results were stored")
+	}
+	if s.Get("key", time.Hour, &wrapperspb.StringValue{}) {
+		t.Fatal("unexpected cache hit")
+	}
+	if _, ok := s.GetZstd("other", time.Hour); ok {
+		t.Fatal("unexpected compressed cache hit")
+	}
+	s.Purge()
+	s.Set("key", msg)
+	if c.Stats().Entries != 0 {
+		t.Fatal("purge enabled caching")
+	}
+}
+
 // stored returns the CacheValue under key as fastcache holds it.
 func stored(t *testing.T, s *Scope, key string) *explorerpb.CacheValue {
 	t.Helper()

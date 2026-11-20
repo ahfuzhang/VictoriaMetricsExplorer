@@ -4,7 +4,7 @@ import {
   ConfiguredChartsRequestSchema,
   ConfiguredChartsResponseSchema,
 } from '../../generated/explorer/metric_config_pb';
-import { callProto, labelFilters, timeRange } from '../api/proto';
+import { callProto, dsURL, labelFilters, timeRange } from '../api/proto';
 
 export async function fetchConfiguredCharts(
   uid: string,
@@ -14,7 +14,7 @@ export async function fetchConfiguredCharts(
   abortSignal: AbortSignal
 ) {
   return callProto({
-    url: `/api/plugins/ahfuzhang-victoriametricsexplorer-app/resources/explorer/v1/ds/${encodeURIComponent(uid)}/configured-charts`,
+    url: dsURL(uid, '/configured-charts'),
     method: 'POST',
     response: ConfiguredChartsResponseSchema,
     request: {

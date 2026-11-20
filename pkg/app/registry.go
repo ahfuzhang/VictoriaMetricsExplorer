@@ -192,6 +192,10 @@ func (r *registry) fingerprint(orgID int64, info *datasourceInfo) string {
 }
 
 func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target, error) {
+	forwardOAuth, err := info.forwardsOAuth()
+	if err != nil {
+		return nil, fmt.Errorf("decode datasource OAuth settings: %w", err)
+	}
 	obs := observability.New(info.UID)
 	client, err := vmclient.New(vmclient.Config{
 		UID:                 info.UID,
@@ -199,6 +203,7 @@ func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target,
 		OrgID:               orgID,
 		ConfigFingerprint:   fp,
 		Credentials:         r.creds,
+		ForwardOAuth:        forwardOAuth,
 		PodLabel:            r.settings.PodLabel,
 		NamespaceLabel:      r.settings.NamespaceLabel,
 		NodeLabel:           r.settings.NodeLabel,
@@ -212,7 +217,11 @@ func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target,
 		obs.Close()
 		return nil, err
 	}
-	router := resource.NewRouter(client, r.cache.Scope(), r.lim, obs, client.Config())
+	cacheScope := r.cache.Scope()
+	if forwardOAuth {
+		cacheScope = r.cache.UncachedScope()
+	}
+	router := resource.NewRouter(client, cacheScope, r.lim, obs, client.Config())
 	router.SetMetricCatalog(r.settings.MetricCatalog)
 	return &target{
 		key:         targetKey(orgID, info.UID),

@@ -540,6 +540,94 @@ func TestRejectedServiceAccountIsReported(t *testing.T) {
 	}
 }
 
+func TestOAuthDatasourceUsesCurrentSession(t *testing.T) {
+	g := newFakeGrafana(t)
+	g.datasources["prom"].JSONData = []byte(`{"oauthPassThru":true}`)
+	a := newTestApp(t, g, nil)
+	const path = "explorer/v1/ds/prom/capabilities"
+	if res := call(t, a, viewer(1), http.MethodGet, path, nil); res.status != http.StatusConflict ||
+		res.errorBody(t).Code != "oauth_session_required" {
+		t.Fatalf("expected the session requirement, got %d: %s", res.status, res)
+	}
+
+	for _, user := range []backend.PluginContext{viewer(1), admin()} {
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		events := make(chan oauthEvent, 2)
+		done := make(chan error, 1)
+		go func() {
+			done <- a.CallResource(ctx, &backend.CallResourceRequest{
+				PluginContext: user, Method: http.MethodGet, Path: path, URL: path,
+				Headers: map[string][]string{"Accept": {oauthStreamType}},
+			}, backend.CallResourceResponseSenderFunc(func(resp *backend.CallResourceResponse) error {
+				var event oauthEvent
+				if err := json.Unmarshal(resp.Body, &event); err != nil {
+					return err
+				}
+				events <- event
+				return nil
+			}))
+		}()
+		read := func() oauthEvent {
+			t.Helper()
+			select {
+			case event := <-events:
+				return event
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for OAuth request or result")
+				return oauthEvent{}
+			}
+		}
+		request := read()
+		if request.ID == "" || request.Path != "/api/datasources/proxy/uid/prom/api/v1/labels?limit=10000" {
+			t.Fatalf("expected a fresh labels request for %q, got %+v", user.User.Login, request)
+		}
+		callback := func(user backend.PluginContext) int {
+			t.Helper()
+			path := "explorer/v1/oauth/" + request.ID
+			var status int
+			err := a.CallResource(ctx, &backend.CallResourceRequest{
+				PluginContext: user, Method: http.MethodPost, Path: path, URL: path,
+				Headers: map[string][]string{"X-Explorer-Upstream-Status": {"200"}},
+				Body:    []byte(`{"status":"success","data":["pod"]}`),
+			}, backend.CallResourceResponseSenderFunc(func(resp *backend.CallResourceResponse) error {
+				status = resp.Status
+				return nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return status
+		}
+		other := user
+		other.User = &backend.User{Login: "unrelated", Role: "Admin"}
+		if status := callback(other); status != http.StatusNotFound {
+			t.Fatalf("a different user could reply to the query, got %d", status)
+		}
+		if status := callback(user); status != http.StatusNoContent {
+			t.Fatalf("the initiating user could not reply, got %d", status)
+		}
+		res := read()
+		if res.Status != http.StatusOK {
+			t.Fatalf("unexpected final status %d", res.Status)
+		}
+		var capabilities explorerpb.CapabilitiesResponse
+		result{status: res.Status, body: res.Body}.decode(t, &capabilities)
+		if got := capabilities.GetLabelMappings()[0]; got.GetLabelName() != "pod" || !got.GetDetected() {
+			t.Fatalf("capabilities did not use the session's label response: %v", got)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if status := callback(user); status != http.StatusNotFound {
+			t.Fatalf("a second reply was accepted, got %d", status)
+		}
+	}
+	if count := g.proxyCalls.Load(); count != 0 {
+		t.Fatalf("OAuth requests reached the service account proxy %d times", count)
+	}
+}
+
 // An unreachable datasource must be reported by /capabilities (the first call the UI makes), with
 // the cause and where it failed, and must not be cached once it recovers.
 func TestCapabilitiesReportsUnreachableDatasource(t *testing.T) {

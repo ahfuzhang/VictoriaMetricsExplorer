@@ -52,6 +52,7 @@ type App struct {
 	settings *Settings
 	reg      *registry
 	api      *grafanaAPI
+	oauth    oauthRelay
 	// ownToken is set when the app authenticates with the token from its own configuration.
 	// That token belongs to the organization the configuration belongs to, so unlike Grafana's
 	// managed service account (org 1 only) it serves every organization.
@@ -101,6 +102,7 @@ func newApp(s *Settings, creds vmclient.CredentialsFunc, ownToken bool) *App {
 	mux := http.NewServeMux()
 	mux.HandleFunc(routeDatasources, a.handleListDatasources)
 	mux.HandleFunc(routeScoped, a.handleScoped)
+	mux.HandleFunc("POST /explorer/v1/oauth/{id}", a.oauth.receive)
 	a.CallResourceHandler = httpadapter.New(mux)
 
 	credentials := "managed service account"
@@ -192,6 +194,10 @@ func (a *App) handleScoped(w http.ResponseWriter, r *http.Request) {
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = "/explorer/v1/" + rest
 	r2.URL.RawPath = ""
+	if t.client.Config().ForwardOAuth && rest != "cache" && rest != "cache/purge" {
+		a.oauth.serve(w, r2, t.handler, t.client.Limits().MaxUpstreamBytes)
+		return
+	}
 	t.handler.ServeHTTP(w, r2)
 }
 

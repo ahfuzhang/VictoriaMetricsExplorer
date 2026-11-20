@@ -19,7 +19,11 @@ import (
 )
 
 // EnvDir 是指定图表配置目录的环境变量名。值必须是绝对路径；为空表示不启用配置化图表。
-const EnvDir = "VMX_METRIC_CONFIG_DIR"
+// 该变量由 Grafana 生成：grafana.ini 中 [plugin.<插件 ID>] 段的 vmx_metric_config_dir
+// 会以 GF_PLUGIN_VMX_METRIC_CONFIG_DIR 的形式只转发给本插件进程。因此不需要把插件加入
+// [plugins] forward_host_env_vars —— 那会把 Grafana 进程的全部环境变量（含管理员密码、
+// OAuth client secret 等）都暴露给插件。
+const EnvDir = "GF_PLUGIN_VMX_METRIC_CONFIG_DIR"
 
 // File 对应一个 YAML 配置文件：一个文件描述一个分类及其下的全部图表。
 type File struct {

@@ -186,6 +186,12 @@ func (h *Handlers) podLabel() string {
 func (h *Handlers) loadPodGroups(ctx context.Context, startTime, endTime time.Time) (*explorerpb.PodGroupsCacheEntry, error) {
 	dayStart, dayEnd := dayRange(startTime, endTime)
 	rng := podGroupsRange{start: dayStart.Unix(), end: dayEnd.Unix()}
+	// OAuth transport belongs to this browser request. Never retain it for background refresh
+	// or share an in-flight result with another user's session.
+	if h.router.config.ForwardOAuth {
+		h.router.obs.RecordCacheMiss()
+		return h.fetchPodGroups(ctx, rng)
+	}
 	h.podGroups.touch(ctx, rng)
 
 	var cached explorerpb.PodGroupsCacheEntry

@@ -94,10 +94,16 @@ func (c *Cache) Scope() *Scope {
 	return s
 }
 
+// UncachedScope keeps cache diagnostics available for a datasource without storing its results.
+func (c *Cache) UncachedScope() *Scope {
+	return &Scope{c: c, uncached: true}
+}
+
 // Scope is one datasource's view of a Cache. It is safe for concurrent use.
 type Scope struct {
-	c  *Cache
-	ns atomic.Uint64 // prefixed to every key; Purge moves to an unused one
+	c        *Cache
+	uncached bool
+	ns       atomic.Uint64 // prefixed to every key; Purge moves to an unused one
 }
 
 // Get decodes the entry stored under key into msg, provided it was written at most maxAge ago.
@@ -142,7 +148,7 @@ func (s *Scope) GetZstd(key string, maxAge time.Duration) ([]byte, bool) {
 // get returns the CacheValue stored under key if it was written at most maxAge ago. Expired
 // entries are left in place: fastcache overwrites them as it fills.
 func (s *Scope) get(key string, maxAge time.Duration) (*explorerpb.CacheValue, bool) {
-	if maxAge <= 0 {
+	if s.uncached || maxAge <= 0 {
 		return nil, false
 	}
 	raw := s.c.fc.GetBig(nil, s.key(key))
@@ -170,7 +176,7 @@ func (s *Scope) Set(key string, msg proto.Message) {
 // SetWritten is Set with the write time given instead of now. An entry rewritten with the time
 // GetWritten returned for it keeps its age, so updating it never postpones its expiry.
 func (s *Scope) SetWritten(key string, msg proto.Message, writtenAt time.Time) {
-	if s.c.closed.Load() {
+	if s.uncached || s.c.closed.Load() {
 		return
 	}
 	payload, err := proto.Marshal(msg)

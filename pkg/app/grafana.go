@@ -41,6 +41,17 @@ type datasourceInfo struct {
 	JSONData  jsontext.Value `json:"jsonData"`
 }
 
+func (d *datasourceInfo) forwardsOAuth() (bool, error) {
+	if len(d.JSONData) == 0 {
+		return false, nil
+	}
+	var settings struct {
+		OAuthPassThru bool `json:"oauthPassThru"`
+	}
+	err := json.Unmarshal(d.JSONData, &settings)
+	return settings.OAuthPassThru, err
+}
+
 var (
 	errDatasourceNotFound = errors.New("datasource not found")
 	errDatasourceDenied   = errors.New("datasource is not available to the Explorer")
