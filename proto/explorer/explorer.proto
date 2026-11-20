@@ -13,6 +13,8 @@ option go_package = "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/expl
 // X-Payload-Encoding is used rather than Content-Encoding so neither the browser nor a proxy
 // decompresses the body on its own. GET endpoints take no body; a POST with an empty body is the
 // request message with every field at its default. Failures carry an Error with the HTTP status.
+// The backend decodes a request body as X-Payload-Encoding says: a non-empty body without
+// X-Payload-Encoding: zstd is refused with 415 unsupported_encoding.
 
 // ============================================================================
 // Common

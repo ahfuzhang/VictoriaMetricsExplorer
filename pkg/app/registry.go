@@ -31,10 +31,13 @@ const (
 	maxTargets = 32
 )
 
+var nextDatasourceTargetID atomic.Uint64
+
 // target is everything the Explorer keeps for one (organization, datasource) pair.
 type target struct {
 	key         string
 	fingerprint string
+	id          uint64
 	handler     http.Handler
 	router      *resource.Router
 	client      *vmclient.Client
@@ -226,6 +229,7 @@ func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target,
 	return &target{
 		key:         targetKey(orgID, info.UID),
 		fingerprint: fp,
+		id:          nextDatasourceTargetID.Add(1),
 		handler:     router.HTTPHandler(),
 		router:      router,
 		client:      client,

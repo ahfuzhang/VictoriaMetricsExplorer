@@ -18,6 +18,7 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/limits"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/observability"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/requestcontext"
 )
 
 // ErrNoServiceAccount means Grafana did not hand the plugin a service-account token
@@ -25,6 +26,9 @@ import (
 var ErrNoServiceAccount = errors.New("grafana did not provide a service account token to the plugin: " +
 	"set a service account token on the app's Configuration page (Administration > Plugins), or enable " +
 	"the externalServiceAccounts feature toggle and [auth] managed_service_accounts_enabled and restart Grafana")
+
+// ErrOAuthUnsupported prevents silently replacing the user's OAuth identity with a service account.
+var ErrOAuthUnsupported = errors.New("this datasource uses Forward OAuth Identity, but Grafana does not provide the user's OAuth access token to app backends; server-side queries cannot authenticate as this user. Configure a datasource with server-side credentials accepted by the upstream, or use a datasource backend that supports OAuth forwarding")
 
 // CredentialsFunc returns the Grafana base URL and the service-account token used to
 // reach a datasource through Grafana. It is called for every upstream request because
@@ -83,7 +87,7 @@ type Config struct {
 
 	// Credentials supplies the Grafana URL and service-account token. Defaults to GrafanaCredentials.
 	Credentials CredentialsFunc
-	// ForwardOAuth selects the datasource proxy in the current user's Grafana session.
+	// ForwardOAuth marks a datasource requiring user OAuth credentials, unsupported by this app backend.
 	ForwardOAuth bool
 
 	// Label mappings
@@ -146,7 +150,7 @@ func New(cfg Config, lim *limits.Limits, obs *observability.Observability) (*Cli
 			if len(via) > 3 {
 				return fmt.Errorf("too many redirects")
 			}
-			if len(via) > 0 && req.URL.Host != via[0].URL.Host {
+			if len(via) > 0 && (req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme) {
 				return fmt.Errorf("cross-host redirect blocked")
 			}
 			return nil
@@ -184,15 +188,6 @@ func (c *Client) Observability() *observability.Observability {
 }
 
 const datasourceProxyPath = "/api/datasources/proxy/uid/"
-
-type sessionProxyKey struct{}
-type sessionProxy func(context.Context, string) (*http.Response, error)
-
-// WithSessionProxy supplies the request transport for an OAuth datasource. Paths are relative
-// to Grafana and include the configured datasource UID.
-func WithSessionProxy(ctx context.Context, proxy sessionProxy) context.Context {
-	return context.WithValue(ctx, sessionProxyKey{}, proxy)
-}
 
 // BuildURL constructs the Grafana datasource-proxy URL for an upstream API path and its encoded
 // query string. Only the Grafana base URL and the configured datasource UID are used — user input
@@ -251,22 +246,12 @@ func (c *Client) doOK(ctx context.Context, method, apiPath string, query []byte)
 		StatusCode: resp.StatusCode,
 		Body:       TruncateBody(body, 512),
 		Path:       apiPath,
-		viaSession: c.config.ForwardOAuth,
 	}
 }
 
 func (c *Client) request(ctx context.Context, method, apiPath string, query []byte, body io.Reader) (*http.Response, error) {
 	if c.config.ForwardOAuth {
-		proxy, ok := ctx.Value(sessionProxyKey{}).(sessionProxy)
-		if !ok {
-			return nil, errors.New("datasource requires the current Grafana OAuth session")
-		}
-		if method != http.MethodGet || body != nil {
-			return nil, errors.New("the session proxy only supports GET")
-		}
-		ctx, cancel := context.WithTimeout(ctx, c.config.Timeout)
-		defer cancel()
-		return proxy(ctx, c.BuildURL("", apiPath, query))
+		return nil, ErrOAuthUnsupported
 	}
 	baseURL, token, err := c.config.Credentials(ctx)
 	if err != nil {
@@ -277,6 +262,7 @@ func (c *Client) request(ctx context.Context, method, apiPath string, query []by
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
+	requestcontext.Apply(req)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 
@@ -311,8 +297,7 @@ type UpstreamError struct {
 	StatusCode int
 	Body       string
 	// Path is the upstream API path that failed (e.g. /api/v1/labels); empty when unknown.
-	Path       string
-	viaSession bool
+	Path string
 }
 
 func (e *UpstreamError) Error() string {
@@ -324,18 +309,12 @@ func (e *UpstreamError) Error() string {
 		if e.Path != "" && e.Body == "Authentication to data source failed" {
 			// Grafana's datasource proxy maps an upstream 401 to this HTTP 400 response.
 			head = "the datasource rejected its upstream credentials (HTTP 401 reported by Grafana as HTTP 400)"
-			if e.viaSession {
-				head += "; sign in using the datasource's OAuth provider and check the datasource authentication settings"
-			}
 		} else {
 			head, withStatus = "upstream returned HTTP ", true
 		}
 	case http.StatusUnauthorized:
 		head = "grafana rejected the plugin service account (HTTP 401); check the token on the app's Configuration page, " +
 			"or that managed service accounts are enabled"
-		if e.viaSession {
-			head = "grafana rejected the current session (HTTP 401); sign in again"
-		}
 	case http.StatusForbidden:
 		head = "access denied (HTTP 403); check the Grafana datasources:query permission and the datasource authorization settings"
 	case http.StatusNotFound:

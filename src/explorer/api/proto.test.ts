@@ -1,54 +1,64 @@
 /** @jest-environment node */
-jest.mock('@grafana/runtime', () => ({ getBackendSrv: jest.fn(), getDataSourceSrv: jest.fn() }));
-jest.mock('./oauth', () => ({ fetchWithOAuthSession: jest.fn() }));
+jest.mock('@grafana/runtime', () => ({ getBackendSrv: jest.fn() }));
 
-import { create, toBinary } from '@bufbuild/protobuf';
-import { getBackendSrv, getDataSourceSrv } from '@grafana/runtime';
+import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
+import { getBackendSrv } from '@grafana/runtime';
 import { of, throwError } from 'rxjs';
-import { CapabilitiesResponseSchema, ErrorSchema } from '../../generated/explorer/explorer_pb';
-import { fetchWithOAuthSession } from './oauth';
-import { callProto, dsURL, RESOURCES } from './proto';
-import { zstdFrame } from './zstd';
+import { CapabilitiesResponseSchema, ErrorSchema, RangeQueryRequestSchema } from '../../generated/explorer/explorer_pb';
+import { callProto, dsURL } from './proto';
+import { zstdDecompress, zstdFrame } from './zstd';
 
 const fetch = jest.fn();
-const getInstanceSettings = jest.fn();
 const data = zstdFrame(
-  toBinary(
-    CapabilitiesResponseSchema,
-    create(CapabilitiesResponseSchema, {
-      upstreamProduct: 'Prometheus',
-    })
-  )
+  toBinary(CapabilitiesResponseSchema, create(CapabilitiesResponseSchema, { upstreamProduct: 'Prometheus' }))
 ).buffer;
 const call = { url: dsURL('prom', '/capabilities'), method: 'GET' as const, response: CapabilitiesResponseSchema };
 
 beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(getBackendSrv).mockReturnValue({ fetch } as unknown as ReturnType<typeof getBackendSrv>);
-  jest
-    .mocked(getDataSourceSrv)
-    .mockReturnValue({ getInstanceSettings } as unknown as ReturnType<typeof getDataSourceSrv>);
-  jest.mocked(fetchWithOAuthSession).mockResolvedValue({ status: 200, data });
 });
 
-it('uses the session relay for an OAuth datasource', async () => {
-  getInstanceSettings.mockReturnValue({ jsonData: { oauthPassThru: true } });
-  expect((await callProto(call)).upstreamProduct).toBe('Prometheus');
-  expect(fetch).not.toHaveBeenCalled();
-  expect(fetchWithOAuthSession).toHaveBeenCalledWith(call.url, `${RESOURCES}/oauth`, 'prom', expect.any(Object));
-});
-
-it('keeps the existing backend path for other datasources', async () => {
-  getInstanceSettings.mockReturnValue({ jsonData: {} });
+it('queries only the app backend and decodes its binary response', async () => {
   fetch.mockReturnValue(of({ data }));
   expect((await callProto(call)).upstreamProduct).toBe('Prometheus');
-  expect(fetchWithOAuthSession).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: call.url,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      headers: { Accept: 'application/x-protobuf' },
+    })
+  );
 });
 
-it('retries with the session when the backend reports newer OAuth settings', async () => {
-  getInstanceSettings.mockReturnValue({ jsonData: {} });
-  const error = zstdFrame(toBinary(ErrorSchema, create(ErrorSchema, { code: 'oauth_session_required' }))).buffer;
-  fetch.mockReturnValue(throwError(() => ({ status: 409, data: error })));
-  expect((await callProto(call)).upstreamProduct).toBe('Prometheus');
-  expect(fetchWithOAuthSession).toHaveBeenCalledTimes(1);
+it('sends the chart query as binary without uploading upstream JSON', async () => {
+  fetch.mockReturnValue(of({ data }));
+  const controller = new AbortController();
+  await callProto({
+    ...call,
+    url: dsURL('prom', '/query-range'),
+    method: 'POST',
+    request: { schema: RangeQueryRequestSchema, init: { query: 'up' } },
+    abortSignal: controller.signal,
+  });
+  const request = fetch.mock.calls[0][0];
+  expect(request.headers['Content-Type']).toBe('application/x-protobuf');
+  expect(request.headers['X-Payload-Encoding']).toBe('zstd');
+  expect(request.abortSignal).toBe(controller.signal);
+  expect(request.data).toBeInstanceOf(Blob);
+  const message = fromBinary(RangeQueryRequestSchema, zstdDecompress(new Uint8Array(await request.data.arrayBuffer())));
+  expect(message.query).toBe('up');
 });
+
+it.each(['oauth_forwarding_unsupported', 'oauth_session_required'])(
+  'surfaces %s without a browser relay or retry',
+  async (code) => {
+    const message = 'Grafana does not provide the user OAuth token to app backends';
+    const error = zstdFrame(toBinary(ErrorSchema, create(ErrorSchema, { code, message }))).buffer;
+    fetch.mockReturnValue(throwError(() => ({ status: 422, data: error })));
+    await expect(callProto(call)).rejects.toMatchObject({ status: 422, data: { code, message } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  }
+);

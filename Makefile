@@ -1,4 +1,4 @@
-.PHONY: proto build build-go build-frontend test test-go test-frontend test-e2e test-userstorage vet lint clean dev provision docker build-linux run stop logs
+.PHONY: proto build build-go build-frontend test test-go test-frontend test-e2e test-userstorage vet lint clean dev provision docker build-linux run stop logs restart deploy
 
 # Plugin ID (the Explorer is a single app plugin; it uses existing Prometheus and VictoriaMetrics datasources)
 APP_PLUGIN_ID := ahfuzhang-victoriametricsexplorer-app
@@ -108,7 +108,12 @@ docker: ## Build Docker image
 # Docker engine architecture (arm64 on Apple Silicon, amd64 on Intel); the Linux plugin binary must match it
 DOCKER_ARCH ?= $(shell docker version --format '{{.Server.Arch}}' 2>/dev/null)
 COMPOSE ?= docker compose
-GRAFANA_URL ?= http://localhost:3000
+GRAFANA_PORT ?= 3000
+GRAFANA_URL ?= http://localhost:$(GRAFANA_PORT)
+GRAFANA_AUTH ?= admin:admin
+# Grafana container for restart/deploy; empty = the running container that publishes GRAFANA_PORT on the host
+GRAFANA_CONTAINER ?=
+DEPLOY_DIR := .deploy
 
 # Frontend first: webpack cleans dist/, so the Go binary has to be written after it.
 # Grafana resolves the executable next to plugin.json using the <executable>_<os>_<arch> naming.
@@ -133,6 +138,58 @@ stop: ## Stop Grafana, Prometheus and VictoriaMetrics (data volumes are kept)
 
 logs: ## Tail Grafana logs
 	$(COMPOSE) logs -f grafana
+
+# Shell snippet: sets $container, $plugin_dir (host side of the container's bind-mounted
+# *victoriametricsexplorer-app plugin directory) and $plugin_id (the directory name Grafana loads it under).
+find_grafana = \
+	container='$(GRAFANA_CONTAINER)'; \
+	[ -n "$$container" ] || container=$$(docker ps --format '{{.Names}} {{.Ports}}' | grep -E ':$(GRAFANA_PORT)->' | head -n1 | cut -d' ' -f1); \
+	[ -n "$$container" ] || { echo "No running container publishes port $(GRAFANA_PORT); set GRAFANA_CONTAINER=<name>"; exit 1; }; \
+	mount=$$(docker inspect -f '{{range .Mounts}}{{if eq .Type "bind"}}{{printf "%s\t%s\n" .Source .Destination}}{{end}}{{end}}' "$$container" | grep -E '/[^/]*victoriametricsexplorer-app$$' | head -n1); \
+	[ -n "$$mount" ] || { echo "$$container does not bind-mount a *victoriametricsexplorer-app plugin directory"; exit 1; }; \
+	plugin_dir=$$(printf '%s\n' "$$mount" | cut -f1); \
+	plugin_id=$$(basename "$$(printf '%s\n' "$$mount" | cut -f2)")
+
+# Shell snippet: restarts $container, then waits until Grafana and the $plugin_id backend pass their health checks.
+restart_grafana = \
+	echo "Restarting $$container ($$plugin_id)"; \
+	docker restart "$$container" >/dev/null; \
+	printf "Waiting for Grafana and the plugin backend"; \
+	for i in $$(seq 1 90); do \
+		curl -fsS -u '$(GRAFANA_AUTH)' "$(GRAFANA_URL)/api/plugins/$$plugin_id/health" >/dev/null 2>&1 && break; \
+		printf "."; sleep 1; \
+	done; echo; \
+	curl -fsS "$(GRAFANA_URL)/api/health" >/dev/null || { echo "Grafana is not healthy; check 'docker logs $$container'"; exit 1; }; \
+	health=$$(curl -sS -u '$(GRAFANA_AUTH)' -w ' (HTTP %{http_code})' "$(GRAFANA_URL)/api/plugins/$$plugin_id/health" || true); \
+	echo "Plugin health: $$health"; \
+	case "$$health" in *'(HTTP 200)') ;; *) echo "Plugin is not healthy; check 'docker logs $$container'"; exit 1;; esac; \
+	echo "Grafana is ready: $(GRAFANA_URL)/a/$$plugin_id"
+
+restart: ## Restart the Grafana container (default: the one on GRAFANA_PORT) and check Grafana + plugin health
+	@$(find_grafana); $(restart_grafana)
+
+# Copies the build into the plugin directory the container actually mounts. When Grafana loads the
+# plugin under another ID (e.g. sige-victoriametricsexplorer-app), the frontend bundle, plugin.json and
+# backend binary are rebuilt for that ID. The previous plugin directory is kept in $(DEPLOY_DIR)/backup.
+deploy: build-linux ## Build, install into the running Grafana container's plugin directory, restart it and check health
+	@$(find_grafana); \
+	set -e; \
+	stage=$(DEPLOY_DIR)/stage; \
+	echo "Deploying to $$container: $$plugin_dir (plugin ID $$plugin_id)"; \
+	mkdir -p "$$stage" $(DEPLOY_DIR)/backup; \
+	rsync -a --delete dist/ "$$stage/"; \
+	if [ "$$plugin_id" != "$(APP_PLUGIN_ID)" ]; then \
+		for f in $$(grep -rlI '$(APP_PLUGIN_ID)' "$$stage"); do \
+			sed "s/$(APP_PLUGIN_ID)/$$plugin_id/g" "$$f" > "$$f.tmp" && mv "$$f.tmp" "$$f"; \
+		done; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$(DOCKER_ARCH) go build -trimpath -ldflags="-s -w -X main.appPluginID=$$plugin_id" \
+			-o "$$stage/$(GO_BINARY)_linux_$(DOCKER_ARCH)" .; \
+		grep -q "\"id\": *\"$$plugin_id\"" "$$stage/plugin.json" || { echo "plugin.json was not rewritten to $$plugin_id"; exit 1; }; \
+	fi; \
+	rsync -a --delete "$$plugin_dir/" $(DEPLOY_DIR)/backup/; \
+	rsync -a --delete "$$stage/" "$$plugin_dir/"; \
+	echo "Previous plugin directory saved in $(DEPLOY_DIR)/backup"; \
+	$(restart_grafana)
 
 ##@ Clean
 

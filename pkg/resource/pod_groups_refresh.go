@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/requestcontext"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
 
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
@@ -35,8 +36,7 @@ type podGroupsRefresher struct {
 	stop    context.CancelFunc
 
 	mu sync.Mutex
-	// baseCtx has the values of the latest request, Grafana's credentials among them, but not its
-	// cancellation: the fetches outlive the requests that start them.
+	// baseCtx retains service configuration, but no user identity, request headers or trace.
 	baseCtx  context.Context
 	used     map[podGroupsRange]time.Time // when each range was last requested
 	inflight map[podGroupsRange]*podGroupsCall
@@ -66,12 +66,12 @@ func (p *podGroupsRefresher) close() {
 	p.stop()
 }
 
-// touch records that a request asked for rng, keeps the request's values for the fetches, and
-// starts the refresh loop on the first request.
+// touch records demand and retains service configuration for scheduled refreshes.
+// The immediate fetch separately receives the originating request context.
 func (p *podGroupsRefresher) touch(ctx context.Context, rng podGroupsRange) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.baseCtx = context.WithoutCancel(ctx)
+	p.baseCtx = requestcontext.Background(ctx)
 	if _, ok := p.used[rng]; !ok && len(p.used) >= podGroupsMaxRanges {
 		p.forgetOldestLocked()
 	}
@@ -97,7 +97,7 @@ func (p *podGroupsRefresher) forgetOldestLocked() {
 // load returns the pod groups of rng from a fetch: the one running for rng, or a new one. If ctx
 // ends first, the fetch goes on and still fills the cache.
 func (p *podGroupsRefresher) load(ctx context.Context, rng podGroupsRange) (*explorerpb.PodGroupsCacheEntry, error) {
-	c := p.fetch(rng)
+	c := p.fetch(rng, ctx)
 	select {
 	case <-c.done:
 		return c.result, c.err
@@ -107,7 +107,7 @@ func (p *podGroupsRefresher) load(ctx context.Context, rng podGroupsRange) (*exp
 }
 
 // fetch returns the fetch running for rng, starting one if there is none. Callers have touched rng.
-func (p *podGroupsRefresher) fetch(rng podGroupsRange) *podGroupsCall {
+func (p *podGroupsRefresher) fetch(rng podGroupsRange, requestCtx context.Context) *podGroupsCall {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if c := p.inflight[rng]; c != nil {
@@ -120,7 +120,11 @@ func (p *podGroupsRefresher) fetch(rng podGroupsRange) *podGroupsCall {
 		return c
 	}
 	p.inflight[rng] = c
-	ctx, cancel := context.WithCancel(p.baseCtx)
+	base := p.baseCtx
+	if requestCtx != nil {
+		base = context.WithoutCancel(requestCtx)
+	}
+	ctx, cancel := context.WithCancel(base)
 	go func() {
 		stopped := context.AfterFunc(p.stopCtx, cancel)
 		c.result, c.err = p.h.fetchPodGroups(ctx, rng)
@@ -152,7 +156,7 @@ func (p *podGroupsRefresher) run() {
 // range at a time.
 func (p *podGroupsRefresher) refresh() {
 	for _, rng := range p.activeRanges() {
-		c := p.fetch(rng)
+		c := p.fetch(rng, nil)
 		select {
 		case <-p.stopCtx.Done():
 			return

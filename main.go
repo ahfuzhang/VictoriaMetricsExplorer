@@ -9,8 +9,9 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/app"
 )
 
-// appPluginID must match src/plugin.json.
-const appPluginID = "ahfuzhang-victoriametricsexplorer-app"
+// appPluginID must match src/plugin.json. It is a variable so that `make deploy` can build for a
+// Grafana that loads the plugin under another ID (-ldflags "-X main.appPluginID=<id>").
+var appPluginID = "ahfuzhang-victoriametricsexplorer-app"
 
 func main() {
 	sdklog.DefaultLogger.Info("starting VictoriaMetrics Explorer backend", "pluginID", appPluginID)

@@ -20,6 +20,7 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/observability"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
 )
 
 func TestClassifySamples(t *testing.T) {
@@ -592,12 +593,24 @@ func TestHandleMetricTypesRejectsBadRequests(t *testing.T) {
 		t.Errorf("empty metrics: status %d, want 400", code)
 	}
 	badReq := httptest.NewRequest(http.MethodPost, "/explorer/v1/metric-types", strings.NewReader(`{"metrics":["up"]}`))
+	badReq.Header.Set(wire.EncodingHeader, wire.EncodingZstd)
 	badRec := httptest.NewRecorder()
 	h.handleMetricTypes(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest {
 		t.Errorf("JSON body: status %d, want 400", badRec.Code)
 	} else if e := decodeError(t, badRec); e.Code != "parse_request" {
 		t.Errorf("JSON body: error code %q, want parse_request", e.Code)
+	}
+
+	// A valid zstd body is still refused without X-Payload-Encoding: zstd.
+	noEncoding := postProto(t, "/explorer/v1/metric-types", &explorerpb.MetricTypesRequest{Metrics: []string{"up"}})
+	noEncoding.Header.Del(wire.EncodingHeader)
+	noEncodingRec := httptest.NewRecorder()
+	h.handleMetricTypes(noEncodingRec, noEncoding)
+	if noEncodingRec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("no encoding header: status %d, want 415", noEncodingRec.Code)
+	} else if e := decodeError(t, noEncodingRec); e.Code != "unsupported_encoding" {
+		t.Errorf("no encoding header: error code %q, want unsupported_encoding", e.Code)
 	}
 
 	tooMany := make([]string, metricTypeMaxNames+1)

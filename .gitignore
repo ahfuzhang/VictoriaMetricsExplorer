@@ -1,5 +1,7 @@
 # Build artifacts
 dist/
+# make deploy: staged build and backup of the previously deployed plugin
+/.deploy/
 *.exe
 *.dll
 *.so

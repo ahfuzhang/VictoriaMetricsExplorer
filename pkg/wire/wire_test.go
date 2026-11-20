@@ -105,9 +105,48 @@ func TestDecodeAcceptsRawBlockFrames(t *testing.T) {
 func TestReadRequestRejectsOversizedBody(t *testing.T) {
 	body, _ := Encode(&explorerpb.MetadataRequest{Metric: strings.Repeat("a", 4096)})
 	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	r.Header.Set(EncodingHeader, EncodingZstd)
 	var out explorerpb.MetadataRequest
-	if err := ReadRequest(r, len(body)-1, &out); err == nil {
-		t.Fatal("expected a too-large error")
+	if err := ReadRequest(r, len(body)-1, &out); !IsTooLarge(err) {
+		t.Fatalf("expected a too-large error, got %v", err)
+	}
+}
+
+// The body's encoding comes from X-Payload-Encoding, never from its bytes.
+func TestReadRequestFollowsEncodingHeader(t *testing.T) {
+	in := &explorerpb.MetadataRequest{Metric: "up"}
+	body, err := Encode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, encoding := range []string{"", "gzip", "ZSTD", "identity"} {
+		r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+		if encoding != "" {
+			r.Header.Set(EncodingHeader, encoding)
+		}
+		var out explorerpb.MetadataRequest
+		if err := ReadRequest(r, len(body), &out); !IsUnsupportedEncoding(err) {
+			t.Fatalf("%s %q: expected an unsupported-encoding error, got %v", EncodingHeader, encoding, err)
+		}
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	r.Header.Set(EncodingHeader, EncodingZstd)
+	var out explorerpb.MetadataRequest
+	if err := ReadRequest(r, len(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(in, &out) {
+		t.Fatal("decoded message differs")
+	}
+
+	// An empty body is the request message at its defaults and needs no encoding.
+	out.Metric = "stale"
+	if err := ReadRequest(httptest.NewRequest(http.MethodPost, "/", http.NoBody), len(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Metric != "" {
+		t.Fatalf("empty body must reset the message, got %v", &out)
 	}
 }
 
@@ -125,4 +164,29 @@ func TestWriteErrorIsProtobuf(t *testing.T) {
 	if e.Code != "upstream_error" || e.Message != "boom" || e.RequestId != "req-1" {
 		t.Fatalf("unexpected error body: %v", &e)
 	}
+}
+
+func TestDecodeRefusesLargeZstdFrame(t *testing.T) {
+	data, err := proto.Marshal(&explorerpb.MetadataRequest{Metric: strings.Repeat("a", 4096)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out explorerpb.MetadataRequest
+	for _, body := range [][]byte{rawZstdFrame(data), mustEncode(t, &explorerpb.MetadataRequest{Metric: strings.Repeat("a", 4096)})} {
+		if err := decode(body, len(data)-1, &out); !IsTooLarge(err) {
+			t.Fatalf("expected a too-large error, got %v", err)
+		}
+		if err := decode(body, len(data), &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func mustEncode(t *testing.T, msg proto.Message) []byte {
+	t.Helper()
+	body, err := Encode(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/app"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/metricconfig"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/requestcontext"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
 )
@@ -52,7 +54,6 @@ type App struct {
 	settings *Settings
 	reg      *registry
 	api      *grafanaAPI
-	oauth    oauthRelay
 	// ownToken is set when the app authenticates with the token from its own configuration.
 	// That token belongs to the organization the configuration belongs to, so unlike Grafana's
 	// managed service account (org 1 only) it serves every organization.
@@ -70,8 +71,8 @@ const serviceAccountTokenKey = "serviceAccountToken"
 
 // NewApp creates a new app instance. Grafana creates one per organization, with that
 // organization's settings.
-func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
-	return newConfiguredApp(context.Background(), settings, &metricconfig.Catalog{})
+func NewApp(ctx context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
+	return newConfiguredApp(ctx, settings, &metricconfig.Catalog{})
 }
 
 func newConfiguredApp(_ context.Context, settings backend.AppInstanceSettings, catalog *metricconfig.Catalog) (instancemgmt.Instance, error) {
@@ -102,8 +103,10 @@ func newApp(s *Settings, creds vmclient.CredentialsFunc, ownToken bool) *App {
 	mux := http.NewServeMux()
 	mux.HandleFunc(routeDatasources, a.handleListDatasources)
 	mux.HandleFunc(routeScoped, a.handleScoped)
-	mux.HandleFunc("POST /explorer/v1/oauth/{id}", a.oauth.receive)
-	a.CallResourceHandler = httpadapter.New(mux)
+	a.CallResourceHandler = httpadapter.New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := requestcontext.Capture(r.Context(), backend.PluginConfigFromContext(r.Context()), r.Header)
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	}))
 
 	credentials := "managed service account"
 	if ownToken {
@@ -121,7 +124,14 @@ func (a *App) Dispose() {
 
 // CheckHealth verifies that Grafana gave the plugin a working service account and that it can
 // see at least the datasource list.
-func (a *App) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
+func (a *App) CheckHealth(ctx context.Context, req *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
+	if req != nil {
+		headers := make(http.Header)
+		for k, v := range req.Headers {
+			headers.Set(k, v)
+		}
+		ctx = requestcontext.Capture(ctx, req.PluginContext, headers)
+	}
 	list, err := a.api.listDatasources(ctx)
 	if err != nil {
 		return &backend.CheckHealthResult{
@@ -191,14 +201,41 @@ func (a *App) handleScoped(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if t.client.Config().ForwardOAuth {
+		if rest != "cache" && rest != "cache/purge" {
+			writeError(w, http.StatusUnprocessableEntity, "oauth_forwarding_unsupported", vmclient.ErrOAuthUnsupported.Error())
+			return
+		}
+	} else {
+		var username string
+		if pCtx.User != nil {
+			username = pCtx.User.Login
+		}
+		if err := t.checkDatasourceAccess(r.Context(), username); err != nil {
+			writeDatasourceProbeError(w, uid, err)
+			return
+		}
+	}
+
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = "/explorer/v1/" + rest
 	r2.URL.RawPath = ""
-	if t.client.Config().ForwardOAuth && rest != "cache" && rest != "cache/purge" {
-		a.oauth.serve(w, r2, t.handler, t.client.Limits().MaxUpstreamBytes)
+	t.handler.ServeHTTP(w, r2)
+}
+
+func writeDatasourceProbeError(w http.ResponseWriter, uid string, err error) {
+	if errors.Is(err, vmclient.ErrNoServiceAccount) {
+		writeGrafanaError(w, err)
 		return
 	}
-	t.handler.ServeHTTP(w, r2)
+
+	requestID := uuid.NewString()
+	log.DefaultLogger.Warn("datasource access probe failed", "uid", uid, "requestId", requestID, "error", err)
+	status, code := http.StatusBadGateway, "upstream_error"
+	if isDatasourceDenied(err) {
+		status, code = http.StatusForbidden, "datasource_denied"
+	}
+	wire.WriteError(w, status, code, "datasource access probe failed: "+err.Error(), requestID)
 }
 
 // checkOrg refuses requests from organizations the plugin service account cannot act in.

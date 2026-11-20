@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	json "encoding/json/v2"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -31,14 +34,22 @@ const testToken = "test-sa-token"
 type fakeGrafana struct {
 	*httptest.Server
 
-	mu          sync.Mutex
-	datasources map[string]*datasourceInfo
-	proxyCalls  atomic.Int64
-	apiCalls    atomic.Int64
-	badTokens   atomic.Int64
+	mu           sync.Mutex
+	datasources  map[string]*datasourceInfo
+	proxyCalls   atomic.Int64
+	accessProbes atomic.Int64
+	apiCalls     atomic.Int64
+	badTokens    atomic.Int64
 	// proxyStatus, when non-zero, makes every datasource-proxy call fail with that HTTP status
 	// (what Grafana answers when the datasource's URL is unreachable).
 	proxyStatus atomic.Int64
+	// probeGate, when set, holds every access probe until it is released or its caller gives up.
+	probeGate atomic.Pointer[probeGate]
+}
+
+type probeGate struct {
+	started chan struct{} // receives one value per probe that reached the gate
+	release chan struct{} // closing it lets the held probes answer
 }
 
 func newFakeGrafana(t *testing.T) *fakeGrafana {
@@ -81,6 +92,17 @@ func (g *fakeGrafana) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.MarshalWrite(w, ds)
 	case strings.HasPrefix(r.URL.Path, "/api/datasources/proxy/uid/"):
 		g.proxyCalls.Add(1)
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/api/v1/query") && r.URL.Query().Get("query") == "vector(1)" {
+			g.accessProbes.Add(1)
+			if gate := g.probeGate.Load(); gate != nil {
+				gate.started <- struct{}{}
+				select {
+				case <-gate.release:
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}
 		if status := int(g.proxyStatus.Load()); status != 0 {
 			http.Error(w, `{"message":"Bad Gateway"}`, status)
 			return
@@ -170,19 +192,27 @@ func admin() backend.PluginContext {
 
 func call(t *testing.T, a *App, pCtx backend.PluginContext, method, path string, body proto.Message) result {
 	t.Helper()
+	return callContext(t, context.Background(), a, pCtx, method, path, body)
+}
+
+func callContext(t *testing.T, ctx context.Context, a *App, pCtx backend.PluginContext, method, path string, body proto.Message) result {
+	t.Helper()
 	var payload []byte
+	var headers map[string][]string
 	if body != nil {
 		var err error
 		if payload, err = wire.Encode(body); err != nil {
 			t.Fatal(err)
 		}
+		headers = map[string][]string{"Content-Type": {wire.ContentType}, wire.EncodingHeader: {wire.EncodingZstd}}
 	}
 	var res result
-	err := a.CallResource(context.Background(), &backend.CallResourceRequest{
+	err := a.CallResource(ctx, &backend.CallResourceRequest{
 		PluginContext: pCtx,
 		Method:        method,
 		Path:          path,
 		URL:           path,
+		Headers:       headers,
 		Body:          payload,
 	}, backend.CallResourceResponseSenderFunc(func(resp *backend.CallResourceResponse) error {
 		res.status = resp.Status
@@ -322,6 +352,131 @@ func TestDatasourceReconfigurationInvalidatesCache(t *testing.T) {
 	call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/vm1/metric-index", req)
 	if g.proxyCalls.Load() == before {
 		t.Fatal("a reconfigured datasource must start with an empty cache")
+	}
+}
+
+func TestMetricIndexChecksDatasourceAccessBeforeReadingCache(t *testing.T) {
+	g := newFakeGrafana(t)
+	a := newTestApp(t, g, nil)
+	path := "explorer/v1/ds/vm1/metric-index"
+	req := &explorerpb.MetricIndexRequest{
+		Range: &explorerpb.TimeRange{StartMs: 1700000000000, EndMs: 1700003600000},
+	}
+	firstUser := viewer(1)
+	secondUser := viewer(1)
+	secondUser.User.Login = "another-viewer"
+
+	if res := call(t, a, firstUser, http.MethodPost, path, req); res.status != http.StatusOK {
+		t.Fatalf("first visit: %d %s", res.status, res)
+	}
+	g.proxyStatus.Store(http.StatusForbidden)
+	if res := call(t, a, secondUser, http.MethodPost, path, req); res.status != http.StatusForbidden ||
+		res.errorBody(t).Code != "datasource_denied" {
+		t.Fatalf("another user received a cached response without a successful probe: %d %s", res.status, res)
+	}
+	if res := call(t, a, firstUser, http.MethodPost, path, req); res.status != http.StatusOK ||
+		!res.metricIndex(t).Meta.GetCacheHit() {
+		t.Fatalf("recent visit should read the cache: %d %s", res.status, res)
+	}
+
+	visitOf(t, a, firstUser).lastAccess.Store(time.Now().Add(-datasourceIdleTimeout).UnixNano())
+	if res := call(t, a, firstUser, http.MethodPost, path, req); res.status != http.StatusForbidden {
+		t.Fatalf("expired visit received a cached response: %d %s", res.status, res)
+	}
+
+	// A refusal is remembered: the user is refused again without a probe until it expires.
+	g.proxyStatus.Store(0)
+	if res := call(t, a, secondUser, http.MethodPost, path, req); res.status != http.StatusForbidden ||
+		res.errorBody(t).Code != "datasource_denied" {
+		t.Fatalf("a remembered refusal should be answered without a probe: %d %s", res.status, res)
+	}
+	if got := g.accessProbes.Load(); got != 3 {
+		t.Fatalf("got %d access probes, want 3", got)
+	}
+	expireFailure(t, visitOf(t, a, secondUser))
+	if res := call(t, a, secondUser, http.MethodPost, path, req); res.status != http.StatusOK ||
+		!res.metricIndex(t).Meta.GetCacheHit() {
+		t.Fatalf("successful retry should be able to read the cache: %d %s", res.status, res)
+	}
+	if got := g.accessProbes.Load(); got != 4 {
+		t.Fatalf("got %d access probes, want 4", got)
+	}
+}
+
+// expireFailure makes the remembered failure of v expire now.
+func expireFailure(t *testing.T, v *datasourceVisit) {
+	t.Helper()
+	f := v.failure.Load()
+	if f == nil {
+		t.Fatal("no failure is remembered")
+	}
+	v.failure.Store(&datasourceFailure{until: time.Now().UnixNano(), err: f.err})
+}
+
+// visitOf is the access record of user on vm1.
+func visitOf(t *testing.T, a *App, user backend.PluginContext) *datasourceVisit {
+	t.Helper()
+	key := datasourceVisitKey{targetID: a.reg.targets[targetKey(1, "vm1")].id, username: user.User.Login}
+	v, ok := datasourceVisits.Load(key)
+	if !ok {
+		t.Fatalf("no access record for %s", user.User.Login)
+	}
+	return v.(*datasourceVisit)
+}
+
+func TestConcurrentFirstVisitsShareDatasourceAccessProbe(t *testing.T) {
+	g := newFakeGrafana(t)
+	a := newTestApp(t, g, nil)
+	user := viewer(1)
+
+	var requests sync.WaitGroup
+	for range 8 {
+		requests.Go(func() {
+			if res := call(t, a, user, http.MethodGet, "explorer/v1/ds/vm1/capabilities", nil); res.status != http.StatusOK {
+				t.Errorf("capabilities: %d %s", res.status, res)
+			}
+		})
+	}
+	requests.Wait()
+	if got := g.accessProbes.Load(); got != 1 {
+		t.Fatalf("concurrent first visits made %d access probes, want 1", got)
+	}
+}
+
+// A request waiting for another one's probe must not inherit that request's cancellation.
+func TestCancelledProbeDoesNotFailWaitingRequests(t *testing.T) {
+	g := newFakeGrafana(t)
+	a := newTestApp(t, g, nil)
+	gate := &probeGate{started: make(chan struct{}, 2), release: make(chan struct{})}
+	g.probeGate.Store(gate)
+	path := "explorer/v1/ds/vm1/capabilities"
+
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan result, 1)
+	go func() { first <- callContext(t, ctx, a, viewer(1), http.MethodGet, path, nil) }()
+	<-gate.started
+
+	second := make(chan result, 1)
+	go func() { second <- call(t, a, viewer(1), http.MethodGet, path, nil) }()
+	// Give the second request time to queue behind the running probe. Arriving later still
+	// has to succeed; it only skips the waiting path.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if res := <-first; res.status == http.StatusOK {
+		t.Fatalf("the cancelled request should fail: %d %s", res.status, res)
+	}
+
+	select {
+	case <-gate.started:
+	case res := <-second:
+		t.Fatalf("the waiting request should probe on its own: %d %s", res.status, res)
+	}
+	close(gate.release)
+	if res := <-second; res.status != http.StatusOK {
+		t.Fatalf("the waiting request should probe on its own: %d %s", res.status, res)
+	}
+	if got := g.accessProbes.Load(); got != 2 {
+		t.Fatalf("got %d access probes, want 2", got)
 	}
 }
 
@@ -540,96 +695,112 @@ func TestRejectedServiceAccountIsReported(t *testing.T) {
 	}
 }
 
-func TestOAuthDatasourceUsesCurrentSession(t *testing.T) {
+func TestContextReachesMetadataProxyAndHealthRequests(t *testing.T) {
 	g := newFakeGrafana(t)
-	g.datasources["prom"].JSONData = []byte(`{"oauthPassThru":true}`)
-	a := newTestApp(t, g, nil)
-	const path = "explorer/v1/ds/prom/capabilities"
-	if res := call(t, a, viewer(1), http.MethodGet, path, nil); res.status != http.StatusConflict ||
-		res.errorBody(t).Code != "oauth_session_required" {
-		t.Fatalf("expected the session requirement, got %d: %s", res.status, res)
-	}
-
-	for _, user := range []backend.PluginContext{viewer(1), admin()} {
-		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-		defer cancel()
-		events := make(chan oauthEvent, 2)
-		done := make(chan error, 1)
-		go func() {
-			done <- a.CallResource(ctx, &backend.CallResourceRequest{
-				PluginContext: user, Method: http.MethodGet, Path: path, URL: path,
-				Headers: map[string][]string{"Accept": {oauthStreamType}},
-			}, backend.CallResourceResponseSenderFunc(func(resp *backend.CallResourceResponse) error {
-				var event oauthEvent
-				if err := json.Unmarshal(resp.Body, &event); err != nil {
-					return err
-				}
-				events <- event
-				return nil
-			}))
-		}()
-		read := func() oauthEvent {
-			t.Helper()
-			select {
-			case event := <-events:
-				return event
-			case <-ctx.Done():
-				t.Fatal("timed out waiting for OAuth request or result")
-				return oauthEvent{}
+	var seen atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Add(1)
+		for key, want := range map[string]string{"Authorization": "Bearer " + testToken, "X-Grafana-Org-Id": "1", "X-Grafana-User": "v", "X-Grafana-Id": "signed-test-id", "X-Request-Id": "request-test"} {
+			if got := r.Header.Get(key); got != want {
+				t.Errorf("%s: %s = %q, want %q", r.URL.Path, key, got, want)
 			}
 		}
-		request := read()
-		if request.ID == "" || request.Path != "/api/datasources/proxy/uid/prom/api/v1/labels?limit=10000" {
-			t.Fatalf("expected a fresh labels request for %q, got %+v", user.User.Login, request)
+		if r.Header.Get("Cookie") != "" || r.Header.Get("X-Payload-Encoding") != "" {
+			t.Error("browser or body headers leaked")
 		}
-		callback := func(user backend.PluginContext) int {
-			t.Helper()
-			path := "explorer/v1/oauth/" + request.ID
-			var status int
-			err := a.CallResource(ctx, &backend.CallResourceRequest{
-				PluginContext: user, Method: http.MethodPost, Path: path, URL: path,
-				Headers: map[string][]string{"X-Explorer-Upstream-Status": {"200"}},
-				Body:    []byte(`{"status":"success","data":["pod"]}`),
-			}, backend.CallResourceResponseSenderFunc(func(resp *backend.CallResourceResponse) error {
-				status = resp.Status
-				return nil
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			return status
+		g.serve(w, r)
+	}))
+	t.Cleanup(server.Close)
+	settings, _ := ParseSettings(backend.AppInstanceSettings{})
+	a := newApp(settings, func(context.Context) (string, string, error) { return server.URL, testToken, nil }, false)
+	t.Cleanup(a.Dispose)
+	pc := viewer(1)
+	pc.PluginID = "explorer"
+	headers := map[string][]string{"X-Grafana-Id": {"signed-test-id"}, "X-Request-Id": {"request-test"}, "Cookie": {"secret"}, "X-Payload-Encoding": {"zstd"}}
+	err := a.CallResource(t.Context(), &backend.CallResourceRequest{PluginContext: pc, Method: "GET", Path: "explorer/v1/ds/prom/capabilities", URL: "explorer/v1/ds/prom/capabilities", Headers: headers}, backend.CallResourceResponseSenderFunc(func(resp *backend.CallResourceResponse) error {
+		if resp.Status != 200 {
+			t.Errorf("resource status: %d", resp.Status)
 		}
-		other := user
-		other.User = &backend.User{Login: "unrelated", Role: "Admin"}
-		if status := callback(other); status != http.StatusNotFound {
-			t.Fatalf("a different user could reply to the query, got %d", status)
-		}
-		if status := callback(user); status != http.StatusNoContent {
-			t.Fatalf("the initiating user could not reply, got %d", status)
-		}
-		res := read()
-		if res.Status != http.StatusOK {
-			t.Fatalf("unexpected final status %d", res.Status)
-		}
-		var capabilities explorerpb.CapabilitiesResponse
-		result{status: res.Status, body: res.Body}.decode(t, &capabilities)
-		if got := capabilities.GetLabelMappings()[0]; got.GetLabelName() != "pod" || !got.GetDetected() {
-			t.Fatalf("capabilities did not use the session's label response: %v", got)
-		}
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-		if status := callback(user); status != http.StatusNotFound {
-			t.Fatalf("a second reply was accepted, got %d", status)
-		}
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if count := g.proxyCalls.Load(); count != 0 {
-		t.Fatalf("OAuth requests reached the service account proxy %d times", count)
+	health, err := a.CheckHealth(t.Context(), &backend.CheckHealthRequest{PluginContext: pc, Headers: map[string]string{"X-Grafana-Id": "signed-test-id", "X-Request-Id": "request-test"}})
+	if err != nil || health.Status != backend.HealthStatusOk {
+		t.Fatalf("health: %v, %v", health, err)
+	}
+	if seen.Load() < 3 {
+		t.Fatalf("expected metadata, proxy and health HTTP calls, got %d", seen.Load())
 	}
 }
 
-// An unreachable datasource must be reported by /capabilities (the first call the UI makes), with
-// the cause and where it failed, and must not be cached once it recovers.
+// A large datasource response stays on the server, never becoming a browser callback upload.
+func TestChartQueryProcessesLargeResponseOnBackend(t *testing.T) {
+	g := newFakeGrafana(t)
+	var queries atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/datasources/proxy/uid/prom/api/v1/query_range" {
+			g.serve(w, r)
+			return
+		}
+		queries.Add(1)
+		if r.Header.Get("Authorization") != "Bearer "+testToken || r.Method != http.MethodGet || r.ContentLength > 0 {
+			t.Error("expected authenticated server-side GET without an upstream JSON upload")
+		}
+		// Valid JSON larger than a typical reverse proxy request-body limit.
+		_, _ = fmt.Fprint(w, strings.Repeat(" ", 2<<20), `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up"},"values":[[1700000040,"1"]]}]}}`)
+	}))
+	t.Cleanup(server.Close)
+	settings, _ := ParseSettings(backend.AppInstanceSettings{})
+	a := newApp(settings, func(context.Context) (string, string, error) { return server.URL, testToken, nil }, false)
+	t.Cleanup(a.Dispose)
+	res := call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/prom/query-range", &explorerpb.RangeQueryRequest{
+		Query: "up", Range: &explorerpb.TimeRange{StartMs: 1700000000000, EndMs: 1700003600000}, Step: "1m",
+	})
+	if res.status != http.StatusOK {
+		t.Fatalf("chart query: %d %s", res.status, res)
+	}
+	var response explorerpb.RangeQueryResponse
+	res.decode(t, &response)
+	if queries.Load() != 1 || len(response.Series) != 1 || len(response.Series[0].Values) != 1 || response.Series[0].Values[0] != 1 {
+		t.Fatalf("unexpected chart result: %v", &response)
+	}
+	if len(res.body) > 4096 {
+		t.Fatalf("raw upstream response was forwarded: %d bytes", len(res.body))
+	}
+}
+
+func TestOAuthDatasourceFailsExplicitlyWithoutBrowserRelay(t *testing.T) {
+	g := newFakeGrafana(t)
+	g.datasources["prom"].JSONData = []byte(`{"oauthPassThru":true}`)
+	a := newTestApp(t, g, &Settings{})
+	for _, endpoint := range []string{"capabilities", "pod-groups", "query-range"} {
+		method := http.MethodGet
+		var body proto.Message
+		if endpoint == "query-range" {
+			method = http.MethodPost
+			body = &explorerpb.RangeQueryRequest{Query: "up"}
+		}
+		res := call(t, a, viewer(1), method, "explorer/v1/ds/prom/"+endpoint, body)
+		if res.status != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: %d %s", endpoint, res.status, res)
+		}
+		err := res.errorBody(t)
+		if err.Code != "oauth_forwarding_unsupported" || !strings.Contains(err.Message, "OAuth access token") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if g.proxyCalls.Load() != 0 {
+		t.Fatal("OAuth queries must not silently use the service account identity")
+	}
+	// Stale frontend bundles cannot upload upstream responses to the removed callback.
+	res := call(t, a, viewer(1), http.MethodPost, "explorer/v1/oauth/removed", nil)
+	if res.status != http.StatusNotFound {
+		t.Fatalf("removed callback returned %d", res.status)
+	}
+}
+
 func TestCapabilitiesReportsUnreachableDatasource(t *testing.T) {
 	g := newFakeGrafana(t)
 	a := newTestApp(t, g, nil)
@@ -644,7 +815,7 @@ func TestCapabilitiesReportsUnreachableDatasource(t *testing.T) {
 		t.Fatalf("expected code upstream_error, got %v", body.Code)
 	}
 	msg := body.Message
-	for _, want := range []string{"cannot read labels", "HTTP 502", "/api/v1/labels", "Bad Gateway"} {
+	for _, want := range []string{"datasource access probe failed", "HTTP 502", "/api/v1/query", "Bad Gateway"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message %q should mention %q", msg, want)
 		}
@@ -653,9 +824,54 @@ func TestCapabilitiesReportsUnreachableDatasource(t *testing.T) {
 		t.Fatal("the error should carry a request ID to find it in the Grafana log")
 	}
 
+	// The unreachable datasource is not probed again for a while, even once it is back.
 	g.proxyStatus.Store(0)
+	if res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/vm1/capabilities", nil); res.status != http.StatusBadGateway ||
+		res.errorBody(t).Code != "upstream_error" {
+		t.Fatalf("a remembered unreachable datasource should be answered without a probe: %d %s", res.status, res)
+	}
+	if got := g.accessProbes.Load(); got != 1 {
+		t.Fatalf("got %d access probes, want 1", got)
+	}
+
+	expireFailure(t, visitOf(t, a, viewer(1)))
 	if res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/vm1/capabilities", nil); res.status != http.StatusOK {
 		t.Fatalf("a failed capabilities call must not be cached, got %d: %s", res.status, res)
+	}
+	if got := g.accessProbes.Load(); got != 2 {
+		t.Fatalf("got %d access probes, want 2", got)
+	}
+}
+
+func TestDatasourceProbeFailureKinds(t *testing.T) {
+	live := t.Context()
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	refused := &url.Error{Op: "Get", URL: "http://grafana/api/datasources/proxy/uid/vm1/api/v1/query", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+	for _, tc := range []struct {
+		name        string
+		ctx         context.Context
+		err         error
+		denied      bool
+		unreachable bool
+	}{
+		{"401", live, &vmclient.UpstreamError{StatusCode: http.StatusUnauthorized}, true, false},
+		{"403", live, &vmclient.UpstreamError{StatusCode: http.StatusForbidden}, true, false},
+		{"502", live, &vmclient.UpstreamError{StatusCode: http.StatusBadGateway}, false, true},
+		{"503", live, &vmclient.UpstreamError{StatusCode: http.StatusServiceUnavailable}, false, true},
+		{"504", live, &vmclient.UpstreamError{StatusCode: http.StatusGatewayTimeout}, false, true},
+		{"500", live, &vmclient.UpstreamError{StatusCode: http.StatusInternalServerError}, false, false},
+		{"404", live, &vmclient.UpstreamError{StatusCode: http.StatusNotFound}, false, false},
+		{"connection refused", live, refused, false, true},
+		{"request cancelled", cancelled, &url.Error{Op: "Get", URL: refused.URL, Err: context.Canceled}, false, false},
+		{"malformed answer", live, errors.New("decode response: unexpected end of JSON input"), false, false},
+	} {
+		if got := isDatasourceDenied(tc.err); got != tc.denied {
+			t.Errorf("%s: denied = %v, want %v", tc.name, got, tc.denied)
+		}
+		if got := isDatasourceUnreachable(tc.ctx, tc.err); got != tc.unreachable {
+			t.Errorf("%s: unreachable = %v, want %v", tc.name, got, tc.unreachable)
+		}
 	}
 }
 

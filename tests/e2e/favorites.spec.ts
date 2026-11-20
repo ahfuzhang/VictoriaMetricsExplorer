@@ -97,9 +97,17 @@ async function saveChart(page: Page, favoriteName: string, options: { existing?:
 
 test('saves the chart on screen into a new favorite, on the server only', async ({ browser, request }) => {
   const { context, page } = await signedIn(browser, user);
+  const firstRead = page.waitForResponse(
+    (response) => response.url() === resourceUrl(user) && response.request().method() === 'GET'
+  );
   await openApp(page);
+  expect((await firstRead).status()).toBe(404);
   await expect(page.getByText('No favorites yet. Use ★ Favorite on a chart to save one here.')).toBeVisible();
+  expect(await readResource(request, user)).toBeNull();
+
   await selectMetric(page, E2E_METRIC);
+  const filters = page.getByRole('region', { name: 'Label filters', exact: true });
+  await expect(filters.getByRole('region', { name: 'instance label values' }).getByRole('button')).toHaveCount(2);
 
   const dialog = await saveChart(page, 'E2E requests');
   await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue(E2E_METRIC);

@@ -16,8 +16,10 @@ services:
       - GF_PLUGINS_PREINSTALL_SYNC=victoriametrics-metrics-datasource
       # The app queries datasources with a Grafana-managed service account (declared in plugin.json "iam"),
       # which needs both of these. It only works in org 1.
-      - GF_FEATURE_TOGGLES_ENABLE=accessControlOnCallResource,externalServiceAccounts
+      - GF_FEATURE_TOGGLES_ENABLE=accessControlOnCallResource,externalServiceAccounts,idForwarding
       - GF_AUTH_MANAGED_SERVICE_ACCOUNTS_ENABLED=true
+      # Forward Grafana identity metadata to plugin backends and datasource requests.
+      - GF_DATAPROXY_SEND_USER_HEADER=true
       # Chart definitions ship inside the provisioning directory mounted below.
       - VMX_METRIC_CONFIG_DIR=/etc/grafana/provisioning/plugins/config/metrics
       # Grafana 12.4+ filters plugin process environments unless forwarding is enabled.
@@ -26,6 +28,9 @@ services:
       - ./dist:/var/lib/grafana/plugins/ahfuzhang-victoriametricsexplorer-app
       - ./provisioning:/etc/grafana/provisioning
       - grafana-data:/var/lib/grafana
+    # Lets Grafana reach services on the host (e.g. vmselect at 127.0.0.1:8481) on Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - victoriametrics
       - prometheus

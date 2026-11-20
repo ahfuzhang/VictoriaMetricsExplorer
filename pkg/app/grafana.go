@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/requestcontext"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
 
@@ -69,7 +70,7 @@ func newGrafanaAPI(creds vmclient.CredentialsFunc) *grafanaAPI {
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) > 3 || (len(via) > 0 && req.URL.Host != via[0].URL.Host) {
+				if len(via) > 3 || (len(via) > 0 && (req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme)) {
 					return fmt.Errorf("redirect blocked")
 				}
 				return nil
@@ -87,6 +88,7 @@ func (g *grafanaAPI) get(ctx context.Context, path string, target any) error {
 	if err != nil {
 		return err
 	}
+	requestcontext.Apply(req)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 

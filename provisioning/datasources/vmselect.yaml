@@ -1,0 +1,14 @@
+apiVersion: 1
+
+datasources:
+  # vmselect of a VictoriaMetrics cluster running on the host (127.0.0.1:8481), tenant (accountID) 0.
+  # Grafana runs in a container, so the host is reached through host.docker.internal.
+  - name: VMSelect Tenant 0
+    uid: vmselect-tenant-0
+    type: victoriametrics-metrics-datasource
+    access: proxy
+    url: http://host.docker.internal:8481/select/0/prometheus
+    isDefault: false
+    editable: true
+    jsonData:
+      httpMethod: POST

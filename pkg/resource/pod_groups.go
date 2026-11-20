@@ -12,6 +12,7 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 )
 
 const (
@@ -186,11 +187,8 @@ func (h *Handlers) podLabel() string {
 func (h *Handlers) loadPodGroups(ctx context.Context, startTime, endTime time.Time) (*explorerpb.PodGroupsCacheEntry, error) {
 	dayStart, dayEnd := dayRange(startTime, endTime)
 	rng := podGroupsRange{start: dayStart.Unix(), end: dayEnd.Unix()}
-	// OAuth transport belongs to this browser request. Never retain it for background refresh
-	// or share an in-flight result with another user's session.
 	if h.router.config.ForwardOAuth {
-		h.router.obs.RecordCacheMiss()
-		return h.fetchPodGroups(ctx, rng)
+		return nil, vmclient.ErrOAuthUnsupported
 	}
 	h.podGroups.touch(ctx, rng)
 

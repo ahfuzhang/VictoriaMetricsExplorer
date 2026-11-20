@@ -1,5 +1,6 @@
 // Package wire implements the Explorer's HTTP wire format: every request and response body is a
-// protobuf message compressed with zstd (see proto/explorer/explorer.proto).
+// protobuf message compressed with zstd, announced by X-Payload-Encoding (see
+// proto/explorer/explorer.proto).
 package wire
 
 import (
@@ -52,15 +53,26 @@ func Encode(msg proto.Message) ([]byte, error) {
 }
 
 // Decode reverses Encode into msg. An empty body leaves msg at its defaults.
-// todo: 写得太麻烦了
 func Decode(body []byte, msg proto.Message) error {
+	return decode(body, maxDecodedBytes, msg)
+}
+
+func decode(body []byte, maxDecoded int, msg proto.Message) error {
 	proto.Reset(msg)
 	if len(body) == 0 {
 		return nil
 	}
+	// Refuse a frame that declares an oversized content before decoding any of it.
+	var h zstd.Header
+	if h.Decode(body) == nil && h.HasFCS && h.FrameContentSize > uint64(maxDecoded) {
+		return errTooLarge
+	}
 	data, err := decoder.DecodeAll(body, nil)
 	if err != nil {
 		return fmt.Errorf("zstd: %w", err)
+	}
+	if len(data) > maxDecoded {
+		return errTooLarge
 	}
 	if err := proto.Unmarshal(data, msg); err != nil {
 		return fmt.Errorf("protobuf: %w", err)
@@ -68,9 +80,21 @@ func Decode(body []byte, msg proto.Message) error {
 	return nil
 }
 
-var errTooLarge = errors.New("request body is too large")
+var (
+	errTooLarge            = errors.New("request body is too large")
+	errUnsupportedEncoding = errors.New("request body must be sent with " + EncodingHeader + ": " + EncodingZstd)
+)
 
-// ReadRequest reads at most maxBytes of the request body and decodes it into msg.
+// IsTooLarge reports whether err is ReadRequest's or Decode's refusal of an oversized body.
+func IsTooLarge(err error) bool { return errors.Is(err, errTooLarge) }
+
+// IsUnsupportedEncoding reports whether err is ReadRequest's refusal of a body whose
+// X-Payload-Encoding is missing or not zstd.
+func IsUnsupportedEncoding(err error) bool { return errors.Is(err, errUnsupportedEncoding) }
+
+// ReadRequest reads at most maxBytes of the request body and decodes it into msg. The body's
+// encoding is the one X-Payload-Encoding names; only zstd is accepted. An empty body needs no
+// encoding and leaves msg at its defaults.
 func ReadRequest(r *http.Request, maxBytes int, msg proto.Message) error {
 	// The SDK's httpadapter builds requests with a nil Body when the call carried none.
 	if r.Body == nil {
@@ -85,6 +109,9 @@ func ReadRequest(r *http.Request, maxBytes int, msg proto.Message) error {
 	}
 	if len(body) > maxBytes {
 		return errTooLarge
+	}
+	if len(body) > 0 && r.Header.Get(EncodingHeader) != EncodingZstd {
+		return errUnsupportedEncoding
 	}
 	return Decode(body, msg)
 }

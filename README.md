@@ -307,7 +307,21 @@ YAML 中的查询和展示设置由 Go 后端解析、校验，并绑定当前�
 | `[dataproxy] timeout` | `GF_DATAPROXY_TIMEOUT` | 需要超过 30s 的查询时调大 |
 | — | `VMX_METRIC_CONFIG_DIR` | Important Metrics 图表目录 |
 
+## 请求上下文与权限
+
+App 的服务账号权限为 `datasources:read`、`datasources:query`（`datasources:*`），不因转发上下文而增加权限。数据源 allowlist、组织检查和缓存管理的 Admin 检查仍然生效；服务账号查询不会自动继承浏览器用户的数据源权限。
+
+有明确数据源的请求在进入业务处理前检查最近的访问记录。用户首次访问、在该数据源空闲满 30 分钟或数据源配置变化后，后端通过现有 Grafana 数据源代理查询 `vector(1)`；探测失败时会返回错误，已有的缓存也无法读取。并发首次访问共用一次探测。数据源列表和插件健康检查没有目标数据源，各自直接请求 Grafana 的数据源列表。
+
+所有 `CallResource` 路由及 `CheckHealth` 都保留 SDK 的 PluginContext、GrafanaConfig、取消信号、截止时间和追踪上下文。元信息查询与 datasource proxy 查询使用统一的 `pkg/requestcontext` 转发逻辑，将组织、身份头、插件、请求 ID、面板、Dashboard、语言及追踪信息附加到出站请求。组织和用户名以 SDK 上下文为准；配置中的密钥不会序列化到 HTTP header，浏览器 Cookie、入站 Authorization、X-DS-Authorization、逐跳头及 Protobuf 编码头不复制到新请求。出站 Authorization 仍由服务账号提供。
+
+本地 Grafana 配置启用 `idForwarding` 和 `[dataproxy] send_user_header=true`。这是请求身份元信息转发，不是用户 OAuth 委托。Grafana 可能在 data proxy 处覆盖或移除这些字段；特别是服务账号回连后，`X-Grafana-Id` 表示服务账号，`X-Grafana-User` 可能被移除。后台定时刷新仅保留服务配置和组织，不重放用户身份 Token 或旧追踪头。
+
+可运行 `tests/context/run.sh` 验证完整链路：它启动独立的 Grafana 13.2.2（`127.0.0.1:13001`）及 Prometheus mock（`127.0.0.1:19092`），不修改现有 Grafana 实例。测试通过 Grafana 会话调用 App 的图表 API 和健康检查；原始请求头、脱敏报告及状态写入 `test-results/context-forwarding/`。测试容器保留供检查，使用 `docker rm -f vmx-context-grafana vmx-context-mock` 和 `docker network rm vmx-context-test` 清理。重复执行前需清理同名测试容器。
+
 ## 已知限制
+
+- **不支持数据源的 Forward OAuth Identity。** App 后端拿不到当前用户的 OAuth access token，相关请求返回 `oauth_forwarding_unsupported`。所有上游查询由后端通过 Grafana datasource proxy 发起，前端只收发业务二进制协议，不代查数据源、不上传上游 JSON。需要使用上游认可的服务端凭据，或另行实现支持 OAuth 转发的数据源后端；仅关闭 OAuth 选项不会自动补齐认证。
 
 - 自动生成的查询会根据数据源类型选择兼容语法；收藏中手写的表达式保留原文。包含 MetricsQL 专有语法的收藏切换到 Prometheus 数据源后，需要改写为 PromQL。
 - histogram 视图面向经典的 `_bucket` / `_count` / `_sum` 指标，尚不支持 Prometheus native histogram。
@@ -317,6 +331,15 @@ YAML 中的查询和展示设置由 Go 后端解析、校验，并绑定当前�
 ## 本地开发
 
 安装 Go 1.27 和 Node.js 22，运行 `npm ci` 安装前端依赖后执行 `make run`。修改代码后再次运行 `make run` 会重新构建插件并重建 Grafana 容器。`make help` 列出所有目标。
+
+如果 Grafana 容器不是由本仓库的 `make run` 启动的（例如另一个 compose 项目以其他插件 ID 挂载本插件），使用：
+
+```sh
+make deploy     # 构建，安装到容器实际挂载的插件目录，重启容器并检查健康状态
+make restart    # 只重启 Grafana 容器并检查 Grafana 与插件的健康状态
+```
+
+两个目标默认选择宿主机上发布 3000 端口的容器，从它的 bind mount 中找到 `*victoriametricsexplorer-app` 插件目录及插件 ID。插件 ID 与本仓库不同时，`make deploy` 会用该 ID 生成 plugin.json、前端包和后端二进制。用 `GRAFANA_CONTAINER=<容器名>` 或 `GRAFANA_PORT=<端口>` 指定其他容器。原插件目录备份在 `.deploy/backup/`。`docker restart` 不会应用 compose 文件中环境变量或挂载的改动，这类改动需要重建容器。
 
 验证命令：
 

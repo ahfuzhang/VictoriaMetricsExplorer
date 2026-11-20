@@ -113,6 +113,14 @@ func (h *Handlers) decodePost(w http.ResponseWriter, r *http.Request, msg proto.
 		return false
 	}
 	if err := wire.ReadRequest(r, h.router.limits.MaxRequestBody, msg); err != nil {
+		if wire.IsTooLarge(err) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", err.Error(), requestID)
+			return false
+		}
+		if wire.IsUnsupportedEncoding(err) {
+			writeError(w, http.StatusUnsupportedMediaType, "unsupported_encoding", err.Error(), requestID)
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "parse_request", "failed to parse request: "+err.Error(), requestID)
 		return false
 	}
