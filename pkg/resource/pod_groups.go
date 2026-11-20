@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	podGroupsCacheTTL = 2 * time.Minute
 	// k8sRandomAlphabet is the alphabet Kubernetes uses for generated name suffixes (ReplicaSet
 	// pod-template hashes and the random pod suffix): no vowels and no 0, 1 or 3.
 	k8sRandomAlphabet = "bcdfghjklmnpqrstvwxz2456789"
@@ -181,34 +180,47 @@ func (h *Handlers) podLabel() string {
 	return "pod"
 }
 
-// loadPodGroups fetches the pod label's values for the day-aligned range and groups them.
+// loadPodGroups returns the pod groups of the day-aligned range. The background refresh keeps
+// them in the cache for the ranges in use, so only the first request of a range (or one after the
+// cache dropped it) waits for the datasource.
 func (h *Handlers) loadPodGroups(ctx context.Context, startTime, endTime time.Time) (*explorerpb.PodGroupsCacheEntry, error) {
-	dayStart := startTime.Truncate(24 * time.Hour)
-	dayEnd := endTime.Truncate(24 * time.Hour).Add(24 * time.Hour)
-	label := h.podLabel()
+	dayStart, dayEnd := dayRange(startTime, endTime)
+	rng := podGroupsRange{start: dayStart.Unix(), end: dayEnd.Unix()}
+	h.podGroups.touch(ctx, rng)
 
-	cfg := &h.router.config
-	key := make([]byte, 0, cache.KeySize("pod-groups-v3", cfg.UID, cfg.ConfigFingerprint, label)+2*cache.MaxIntKeySize)
-	key = cache.AppendKey(key, "pod-groups-v3", cfg.UID, cfg.ConfigFingerprint, label)
-	key = cache.AppendKeyInt(key, dayStart.Unix())
-	cacheKey := cache.HashKey(cache.AppendKeyInt(key, dayEnd.Unix()))
 	var cached explorerpb.PodGroupsCacheEntry
-	if h.router.cache.Get(cacheKey, podGroupsCacheTTL, &cached) {
+	if h.router.cache.Get(h.podGroupsCacheKey(rng), podGroupsCacheTTL, &cached) {
 		h.router.obs.RecordCacheHit()
 		return &cached, nil
 	}
 	h.router.obs.RecordCacheMiss()
+	return h.podGroups.load(ctx, rng)
+}
 
-	pods, isPartial, err := h.router.client.LabelValues(ctx, label, nil, dayStart, dayEnd, h.router.limits.MaxMetricNamesHard)
+// fetchPodGroups fetches the pod label's values for rng, groups them, and caches the groups.
+func (h *Handlers) fetchPodGroups(ctx context.Context, rng podGroupsRange) (*explorerpb.PodGroupsCacheEntry, error) {
+	label := h.podLabel()
+	pods, isPartial, err := h.shardedLabelValues(ctx, label, time.Unix(rng.start, 0), time.Unix(rng.end, 0))
 	if err != nil {
 		return nil, err
 	}
-	result := &explorerpb.PodGroupsCacheEntry{Label: label, Partial: isPartial}
-	for _, group := range buildPodGroups(pods) {
-		result.Groups = append(result.Groups, &explorerpb.PodGroup{Name: group.Name, Count: uint32(group.Count), Pods: group.Pods})
+	groups := buildPodGroups(pods)
+	result := &explorerpb.PodGroupsCacheEntry{Label: label, Partial: isPartial, Groups: make([]*explorerpb.PodGroup, len(groups))}
+	for i, group := range groups {
+		result.Groups[i] = &explorerpb.PodGroup{Name: group.Name, Count: uint32(group.Count), Pods: group.Pods}
 	}
-	h.router.cache.Set(cacheKey, result)
+	h.router.cache.Set(h.podGroupsCacheKey(rng), result)
 	return result, nil
+}
+
+// podGroupsCacheKey is the cache key of rng's pod groups.
+func (h *Handlers) podGroupsCacheKey(rng podGroupsRange) string {
+	cfg := &h.router.config
+	label := h.podLabel()
+	key := make([]byte, 0, cache.KeySize("pod-groups-v4", cfg.UID, cfg.ConfigFingerprint, label)+2*cache.MaxIntKeySize)
+	key = cache.AppendKey(key, "pod-groups-v4", cfg.UID, cfg.ConfigFingerprint, label)
+	key = cache.AppendKeyInt(key, rng.start)
+	return cache.HashKey(cache.AppendKeyInt(key, rng.end))
 }
 
 func (h *Handlers) handlePodGroups(w http.ResponseWriter, r *http.Request) {

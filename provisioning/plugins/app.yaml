@@ -30,6 +30,9 @@ apps:
       # proxy). Default 120s. Grafana's own [dataproxy] timeout (default 30s) also applies, so raise
       # that too (GF_DATAPROXY_TIMEOUT) for a longer limit.
       upstreamTimeout: 120s
+      # Whether the By Pod view shows the Important Metrics entry. false hides the entry and the charts
+      # of the chart directory (VMX_METRIC_CONFIG_DIR). Default true.
+      showImportantMetrics: false
     # The Explorer reaches datasources with the service account Grafana manages for the plugin, which
     # needs the externalServiceAccounts feature toggle and [auth] managed_service_accounts_enabled and
     # only works in org 1. Without them, give it a token of a service account of this organization with

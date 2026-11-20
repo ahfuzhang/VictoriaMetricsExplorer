@@ -20,7 +20,11 @@ import (
 // credentials: connection details live in the Grafana datasources the app explores.
 type Settings struct {
 	// MetricCatalog is the immutable process-wide YAML snapshot, shared by all organizations.
+	// It is nil when ShowImportantMetrics is false.
 	MetricCatalog *metricconfig.Catalog
+	// ShowImportantMetrics controls the Important Metrics entry of the By Pod view. When false the
+	// entry is hidden and the configured-charts API reports the chart directory as disabled.
+	ShowImportantMetrics bool
 	// DatasourceUIDs optionally restricts which datasources the Explorer may query. When
 	// empty, every Prometheus or VictoriaMetrics datasource in the organization is available.
 	//
@@ -63,15 +67,16 @@ var byteUnits = map[string]float64{
 // ParseSettings extracts Settings from Grafana's AppInstanceSettings.
 func ParseSettings(settings backend.AppInstanceSettings) (*Settings, error) {
 	s := &Settings{
-		PodLabel:            "pod",
-		NamespaceLabel:      "namespace",
-		NodeLabel:           "node",
-		ClusterLabel:        "cluster",
-		DefaultTimeRange:    time.Hour,
-		CacheTTL:            2 * time.Minute,
-		MetricIndexCacheTTL: resource.DefaultMetricIndexCacheTTL,
-		LocalCacheSize:      cache.DefaultMaxBytes,
-		UpstreamTimeout:     vmclient.DefaultTimeout,
+		PodLabel:             "pod",
+		NamespaceLabel:       "namespace",
+		NodeLabel:            "node",
+		ClusterLabel:         "cluster",
+		DefaultTimeRange:     time.Hour,
+		CacheTTL:             2 * time.Minute,
+		MetricIndexCacheTTL:  resource.DefaultMetricIndexCacheTTL,
+		LocalCacheSize:       cache.DefaultMaxBytes,
+		UpstreamTimeout:      vmclient.DefaultTimeout,
+		ShowImportantMetrics: true,
 	}
 	if len(settings.JSONData) == 0 {
 		return s, nil
@@ -88,6 +93,8 @@ func ParseSettings(settings backend.AppInstanceSettings) (*Settings, error) {
 		MetricIndexCacheTTL string   `json:"metricIndexCacheTTL"` // e.g. "30m", "1h"
 		LocalCacheSize      any      `json:"localCacheSize"`      // e.g. "1GB", "512MB", or a number of bytes
 		UpstreamTimeout     string   `json:"upstreamTimeout"`     // e.g. "120s", "5m"
+		// A pointer tells an omitted setting (default true) from an explicit false.
+		ShowImportantMetrics *bool `json:"showImportantMetrics"`
 	}
 	if err := json.Unmarshal(settings.JSONData, &jd); err != nil {
 		return nil, fmt.Errorf("parse jsonData: %w", err)
@@ -145,6 +152,9 @@ func ParseSettings(settings backend.AppInstanceSettings) (*Settings, error) {
 			return nil, fmt.Errorf("upstreamTimeout %q is not a positive duration", jd.UpstreamTimeout)
 		}
 		s.UpstreamTimeout = d
+	}
+	if jd.ShowImportantMetrics != nil {
+		s.ShowImportantMetrics = *jd.ShowImportantMetrics
 	}
 	return s, nil
 }

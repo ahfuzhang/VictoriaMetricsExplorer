@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/grafana/grafana-plugin-sdk-go v0.297.0
 	github.com/klauspost/compress v1.20.3
+	github.com/valyala/fastjson v1.6.10
 	go.yaml.in/yaml/v3 v3.0.5
 	google.golang.org/protobuf v1.36.12
 )

@@ -36,6 +36,7 @@ type target struct {
 	key         string
 	fingerprint string
 	handler     http.Handler
+	router      *resource.Router
 	client      *vmclient.Client
 	obs         *observability.Observability
 
@@ -46,6 +47,7 @@ type target struct {
 // close releases the target. Its cache entries need nothing: no other scope can reach them, and
 // they are overwritten as the cache fills.
 func (t *target) close() {
+	t.router.Close()
 	t.client.Close()
 	t.obs.Close()
 }
@@ -216,6 +218,7 @@ func (r *registry) build(orgID int64, info *datasourceInfo, fp string) (*target,
 		key:         targetKey(orgID, info.UID),
 		fingerprint: fp,
 		handler:     router.HTTPHandler(),
+		router:      router,
 		client:      client,
 		obs:         obs,
 	}, nil

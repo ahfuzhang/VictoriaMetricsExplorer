@@ -59,21 +59,6 @@ func TestIntegration_LabelValues(t *testing.T) {
 	t.Logf("Got %d metric names (partial=%v), first: %s", len(names), isPartial, names[0])
 }
 
-func TestIntegration_Labels(t *testing.T) {
-	client := newTestClient(t)
-	ctx := context.Background()
-
-	// Test fetching label names
-	labels, _, err := client.Labels(ctx, time.Time{}, time.Time{}, 1000)
-	if err != nil {
-		t.Fatalf("Labels failed: %v", err)
-	}
-	if len(labels) == 0 {
-		t.Fatal("expected at least one label")
-	}
-	t.Logf("Got %d labels, first: %s", len(labels), labels[0])
-}
-
 func TestIntegration_QueryRange(t *testing.T) {
 	client := newTestClient(t)
 	ctx := context.Background()
@@ -95,13 +80,6 @@ func TestIntegration_QueryRange(t *testing.T) {
 		t.Fatal("expected non-empty response data")
 	}
 	t.Logf("QueryRange returned %d bytes for metric %s", len(data), names[0])
-}
-
-func TestIntegration_Version(t *testing.T) {
-	client := newTestClient(t)
-
-	// Empty is acceptable (not every upstream serves buildinfo); an error is not.
-	t.Logf("Upstream version: %q", client.GetUpstreamVersionPublic(context.Background()))
 }
 
 func TestIntegration_Metadata(t *testing.T) {

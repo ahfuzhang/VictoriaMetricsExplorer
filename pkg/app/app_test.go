@@ -86,10 +86,12 @@ func (g *fakeGrafana) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/api/v1/labels"):
+			_, _ = w.Write([]byte(`{"status":"success","data":["__name__","job","namespace","pod"]}`))
 		case strings.HasSuffix(r.URL.Path, "/api/v1/label/__name__/values"):
 			_, _ = w.Write([]byte(`{"status":"success","data":["go_goroutines","process_cpu_seconds_total","up","vm_app_version"]}`))
-		case strings.HasSuffix(r.URL.Path, "/api/v1/labels"):
-			_, _ = w.Write([]byte(`{"status":"success","data":["__name__","job","instance","pod","namespace"]}`))
+		case strings.HasSuffix(r.URL.Path, "/api/v1/label/pod/values"), strings.HasSuffix(r.URL.Path, "/api/v1/label/namespace/values"):
+			_, _ = w.Write([]byte(`{"status":"success","data":["default"]}`))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":[]}`))
 		}
@@ -626,6 +628,51 @@ func TestParseSettings(t *testing.T) {
 		if _, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(bad)}); err == nil {
 			t.Fatalf("expected %s to be rejected", bad)
 		}
+	}
+}
+
+// showImportantMetrics defaults to on. Off, the app drops the chart catalog: capabilities tell the UI
+// to hide the Important Metrics entry and configured-charts reports the charts as disabled.
+func TestShowImportantMetrics(t *testing.T) {
+	g := newFakeGrafana(t)
+	catalog := &metricconfig.Catalog{Enabled: true}
+	for _, tc := range []struct {
+		jsonData string
+		want     bool
+	}{
+		{``, true},
+		{`{}`, true},
+		{`{"showImportantMetrics":true}`, true},
+		{`{"showImportantMetrics":false}`, false},
+	} {
+		inst, err := newConfiguredApp(context.Background(), backend.AppInstanceSettings{JSONData: []byte(tc.jsonData)}, catalog)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.jsonData, err)
+		}
+		s := inst.(*App).settings
+		inst.(*App).Dispose()
+		if s.ShowImportantMetrics != tc.want || (s.MetricCatalog == catalog) != tc.want {
+			t.Fatalf("%s: expected showImportantMetrics=%v with the catalog bound accordingly, got %+v", tc.jsonData, tc.want, s)
+		}
+
+		a := newTestApp(t, g, s)
+		res := call(t, a, viewer(1), http.MethodGet, "explorer/v1/ds/vm1/capabilities", nil)
+		var caps explorerpb.CapabilitiesResponse
+		res.decode(t, &caps)
+		if res.status != http.StatusOK || caps.ImportantMetrics != tc.want {
+			t.Fatalf("%s: expected capabilities important_metrics=%v, got %d %v", tc.jsonData, tc.want, res.status, &caps)
+		}
+		if !tc.want {
+			res = call(t, a, viewer(1), http.MethodPost, "explorer/v1/ds/vm1/configured-charts", &explorerpb.ConfiguredChartsRequest{})
+			var charts explorerpb.ConfiguredChartsResponse
+			res.decode(t, &charts)
+			if res.status != http.StatusOK || charts.Enabled {
+				t.Fatalf("%s: expected configured charts to be disabled, got %d %v", tc.jsonData, res.status, &charts)
+			}
+		}
+	}
+	if _, err := ParseSettings(backend.AppInstanceSettings{JSONData: []byte(`{"showImportantMetrics":"false"}`)}); err == nil {
+		t.Fatal("expected a non-boolean showImportantMetrics to be rejected")
 	}
 }
 

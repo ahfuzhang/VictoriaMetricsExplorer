@@ -70,7 +70,7 @@ const serviceAccountTokenKey = "serviceAccountToken"
 // NewApp creates a new app instance. Grafana creates one per organization, with that
 // organization's settings.
 func NewApp(_ context.Context, settings backend.AppInstanceSettings) (instancemgmt.Instance, error) {
-	return newConfiguredApp(context.Background(), settings, nil)
+	return newConfiguredApp(context.Background(), settings, &metricconfig.Catalog{})
 }
 
 func newConfiguredApp(_ context.Context, settings backend.AppInstanceSettings, catalog *metricconfig.Catalog) (instancemgmt.Instance, error) {
@@ -78,7 +78,10 @@ func newConfiguredApp(_ context.Context, settings backend.AppInstanceSettings, c
 	if err != nil {
 		return nil, err
 	}
-	s.MetricCatalog = catalog
+	// Without a catalog the Explorer hides Important Metrics (capabilities) and serves no charts.
+	if s.ShowImportantMetrics {
+		s.MetricCatalog = catalog
+	}
 	// A configured token wins over the managed service account: it is the admin's explicit choice,
 	// and the managed account would act in org 1 whatever organization this instance serves.
 	if token := strings.TrimSpace(settings.DecryptedSecureJSONData[serviceAccountTokenKey]); token != "" {

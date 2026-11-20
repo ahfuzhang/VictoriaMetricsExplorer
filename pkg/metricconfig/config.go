@@ -1,5 +1,5 @@
-// Package metricconfig loads read-only chart definitions. Metric names, expressions and
-// visualization settings belong to YAML; this package only validates and binds templates.
+// Package metricconfig 加载只读的图表定义。指标名、查询表达式和可视化设置都写在 YAML 中，
+// 本包只负责校验配置并绑定查询模板。
 package metricconfig
 
 import (
@@ -18,100 +18,171 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// EnvDir 是指定图表配置目录的环境变量名。值必须是绝对路径；为空表示不启用配置化图表。
 const EnvDir = "VMX_METRIC_CONFIG_DIR"
 
+// File 对应一个 YAML 配置文件：一个文件描述一个分类及其下的全部图表。
 type File struct {
-	APIVersion int      `yaml:"apiVersion"`
-	Category   Category `yaml:"category"`
-	Charts     []Chart  `yaml:"charts"`
+	// APIVersion 是配置格式的版本号，目前只支持 1。
+	APIVersion int `yaml:"apiVersion"`
+	// Category 是本文件描述的分类，分类 ID 在所有配置文件之间必须唯一。
+	Category Category `yaml:"category"`
+	// Charts 是该分类下的图表列表，不能为空；校验通过后按 Order、ID 排序。
+	Charts []Chart `yaml:"charts"`
 }
 
+// Category 描述一个图表分类，界面上按分类对图表分组展示。
 type Category struct {
-	ID          string `yaml:"id"`
-	Title       string `yaml:"title"`
+	// ID 是分类的唯一标识，须匹配 idPattern（小写字母开头，只含小写字母、数字和 '-'）。
+	ID string `yaml:"id"`
+	// Title 是分类标题，必填。
+	Title string `yaml:"title"`
+	// Description 是分类的说明文字，可选。
 	Description string `yaml:"description"`
-	Order       *int   `yaml:"order"`
+	// Order 是分类的排序权重，越小越靠前；未设置时按 100 处理，权重相同再按 ID 排序。
+	Order *int `yaml:"order"`
 }
 
+// Chart 描述一张图表，包括匹配条件、查询模板和可视化设置。
 type Chart struct {
-	ID            string              `yaml:"id"`
-	Title         string              `yaml:"title"`
-	Description   string              `yaml:"description"`
-	Enabled       *bool               `yaml:"enabled"`
-	Order         *int                `yaml:"order"`
-	Language      string              `yaml:"language"`
-	Match         Match               `yaml:"match"`
-	RateWindow    string              `yaml:"rateWindow"`
-	Selectors     map[string]Selector `yaml:"selectors"`
-	Queries       []Query             `yaml:"queries"`
-	Visualization Visualization       `yaml:"visualization"`
-	Summary       *Summary            `yaml:"summary"`
+	// ID 是图表标识，在同一个文件内唯一，须匹配 idPattern。
+	ID string `yaml:"id"`
+	// Title 是图表标题，必填。
+	Title string `yaml:"title"`
+	// Description 是图表的说明文字，必填。
+	Description string `yaml:"description"`
+	// Enabled 表示是否启用图表；nil 视为启用，显式设为 false 时图表永远不会被匹配。
+	Enabled *bool `yaml:"enabled"`
+	// Order 是图表在分类内的排序权重，规则与 Category.Order 相同。
+	Order *int `yaml:"order"`
+	// Language 是查询语言，取值 "promql"（默认）或 "metricsql"；
+	// metricsql 图表只在数据源支持 MetricsQL 时展示。
+	Language string `yaml:"language"`
+	// Match 是图表的匹配条件，决定图表在什么数据下展示。
+	Match Match `yaml:"match"`
+	// RateWindow 是替换模板占位符 {{rateWindow}} 的时间窗口，如 "30s"、"1m"、"1h"；默认 "1m"。
+	RateWindow string `yaml:"rateWindow"`
+	// Selectors 是选择器别名到选择器定义的映射，模板中以 {{selector:别名}} 引用；
+	// 未在此处定义的别名会被当作同名指标、且不带额外匹配器。
+	Selectors map[string]Selector `yaml:"selectors"`
+	// Queries 是图表的查询列表，不能为空。
+	Queries []Query `yaml:"queries"`
+	// Visualization 是图表的可视化设置。
+	Visualization Visualization `yaml:"visualization"`
+	// Summary 是可选的汇总值设置；为 nil 时不展示汇总值。
+	Summary *Summary `yaml:"summary"`
 }
 
+// Match 定义图表的匹配条件：只有当前数据中存在全部 MetricNames 时，图表才会展示。
 type Match struct {
-	Modes       []string `yaml:"modes"`
+	// Modes 是图表适用的浏览模式，目前只支持 ["byPod"]；为空时默认取 ["byPod"]。
+	Modes []string `yaml:"modes"`
+	// MetricNames 是图表依赖的指标名列表：不能为空、不能重复，并且每个都必须被某条查询引用。
 	MetricNames []string `yaml:"metricNames"`
 }
 
+// Selector 定义一个具名的指标选择器，绑定时展开成带标签过滤条件的 metric selector。
 type Selector struct {
-	MetricName string    `yaml:"metricName"`
-	Matchers   []Matcher `yaml:"matchers"`
+	// MetricName 是选择器对应的指标名，必须出现在 Match.MetricNames 中。
+	MetricName string `yaml:"metricName"`
+	// Matchers 是在上下文过滤条件（pod、namespace 等）之外额外追加的标签匹配器。
+	Matchers []Matcher `yaml:"matchers"`
 }
 
+// Matcher 是一个标签匹配条件，例如 area="heap"。
 type Matcher struct {
+	// Label 是标签名，须是合法的 Prometheus 标签名，且不能是 __name__。
 	Label string `yaml:"label"`
-	Op    string `yaml:"op"`
+	// Op 是匹配操作符，只能是 "="、"!="、"=~"、"!~" 之一。
+	Op string `yaml:"op"`
+	// Value 是匹配值；操作符为正则匹配（=~、!~）时必须是合法的正则表达式。
 	Value string `yaml:"value"`
 }
 
+// Query 描述图表中的一条查询。
 type Query struct {
-	RefID   string `yaml:"refId"`
-	Expr    string `yaml:"expr"`
-	Legend  string `yaml:"legend"`
-	Axis    string `yaml:"axis"`
-	Instant bool   `yaml:"instant"`
-	Hidden  bool   `yaml:"hidden"`
+	// RefID 是查询的引用 ID，须大写字母开头且在图表内唯一；Summary.QueryRef 通过它引用查询。
+	RefID string `yaml:"refId"`
+	// Expr 是查询表达式模板，支持 {{rateWindow}}、{{label:角色}}、{{selector:别名}} 三种占位符；
+	// 表达式中的每个指标选择器都必须写成 {{selector:别名}}，不允许直接写原始选择器。
+	Expr string `yaml:"expr"`
+	// Legend 是曲线的图例模板，前端会用序列的标签值替换其中的 {{标签名}}。
+	Legend string `yaml:"legend"`
+	// Axis 是曲线所在的 Y 轴，取值 "left"（默认）或 "right"。
+	Axis string `yaml:"axis"`
+	// Instant 为 true 时执行即时查询（instant query），否则执行区间查询（range query）。
+	Instant bool `yaml:"instant"`
+	// Hidden 为 true 时前端不执行、也不绘制这条查询。
+	Hidden bool `yaml:"hidden"`
 }
 
-// Options and FieldConfig use Grafana's native schema, so no panel-specific settings
-// or metric-specific rendering rules are compiled into the backend or frontend.
+// Visualization 是图表的可视化设置。Options 和 FieldConfig 直接采用 Grafana 原生的 schema，
+// 因此后端和前端都不需要内置任何面板专属设置或指标专属的渲染规则。
 type Visualization struct {
-	Type        string          `yaml:"type" json:"type"`
-	Height      int             `yaml:"height" json:"height,omitempty"`
-	Width       int             `yaml:"width" json:"width,omitempty"`
-	Axes        map[string]Axis `yaml:"axes" json:"axes,omitempty"`
-	Options     map[string]any  `yaml:"options" json:"options,omitempty"`
-	FieldConfig map[string]any  `yaml:"fieldConfig" json:"fieldConfig,omitempty"`
+	// Type 是图表类型，取值 line、stacked、dual_axis、timeseries、stat、piechart 之一。
+	Type string `yaml:"type" json:"type"`
+	// Height 是图表高度（像素），范围 0..2000；0 表示使用前端默认高度 300。
+	Height int `yaml:"height" json:"height,omitempty"`
+	// Width 是图表宽度（一行共 24 栏），范围 0..24；0 表示占满整行。
+	Width int `yaml:"width" json:"width,omitempty"`
+	// Axes 是 Y 轴设置，键只能是 "left" 或 "right"；与 FieldConfig 至少要设置一个。
+	// 设置了 Axes 时，查询用到的每一侧 Y 轴都必须在这里有定义。
+	Axes map[string]Axis `yaml:"axes" json:"axes,omitempty"`
+	// Options 是 Grafana 面板原生的 options，原样透传给前端。
+	Options map[string]any `yaml:"options" json:"options,omitempty"`
+	// FieldConfig 是 Grafana 面板原生的 fieldConfig，只允许 defaults 和 overrides 两个字段。
+	FieldConfig map[string]any `yaml:"fieldConfig" json:"fieldConfig,omitempty"`
 }
 
+// Axis 描述一侧 Y 轴的显示设置。
 type Axis struct {
-	UnitID   string   `yaml:"unitId" json:"unitId"`
-	Label    string   `yaml:"label" json:"label,omitempty"`
-	Min      *float64 `yaml:"min" json:"min,omitempty"`
-	Max      *float64 `yaml:"max" json:"max,omitempty"`
-	Decimals *int     `yaml:"decimals" json:"decimals,omitempty"`
+	// UnitID 是 Grafana 的单位 ID（如 bytes、percent），必填。
+	UnitID string `yaml:"unitId" json:"unitId"`
+	// Label 是坐标轴标题，可选。
+	Label string `yaml:"label" json:"label,omitempty"`
+	// Min 是坐标轴最小值，可选；必须是有限数，且与 Max 同时设置时须小于 Max。
+	Min *float64 `yaml:"min" json:"min,omitempty"`
+	// Max 是坐标轴最大值，可选；必须是有限数。
+	Max *float64 `yaml:"max" json:"max,omitempty"`
+	// Decimals 是显示的小数位数，可选，范围 0..10。
+	Decimals *int `yaml:"decimals" json:"decimals,omitempty"`
 }
 
+// Summary 描述图表标题旁展示的汇总值。
 type Summary struct {
+	// QueryRef 是汇总所基于的查询的 RefID，必须引用一条已存在的查询；该查询只能返回一条序列。
 	QueryRef string `yaml:"queryRef" json:"queryRef"`
-	Reducer  string `yaml:"reducer" json:"reducer"`
+	// Reducer 是汇总方式，目前只支持 "lastNotNull"（取最后一个非空的有限值）。
+	Reducer string `yaml:"reducer" json:"reducer"`
 }
 
+// Catalog 是加载后的全部图表配置。
 type Catalog struct {
+	// Enabled 表示是否启用配置化图表，即配置目录是否非空。
 	Enabled bool
-	Files   []File
+	// Files 是已通过校验的配置文件，按分类的 Order、ID 排序。
+	Files []File
 }
 
 var (
-	idPattern     = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	namePattern   = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
-	labelPattern  = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-	refPattern    = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
+	// idPattern 校验分类 ID 和图表 ID：小写字母开头，只含小写字母、数字和 '-'。
+	idPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	// namePattern 校验指标名和选择器别名，规则与 Prometheus 指标名一致。
+	namePattern = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+	// labelPattern 校验标签名，规则与 Prometheus 标签名一致。
+	labelPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+	// refPattern 校验查询的 RefID：大写字母开头，只含字母和数字。
+	refPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
+	// windowPattern 校验 RateWindow：正整数加 s、m、h 单位。
 	windowPattern = regexp.MustCompile(`^[1-9][0-9]*[smh]$`)
-	tokenPattern  = regexp.MustCompile(`\{\{([^{}]+)\}\}`)
+	// tokenPattern 匹配查询模板中的 {{...}} 占位符，子匹配为占位符名称。
+	tokenPattern = regexp.MustCompile(`\{\{([^{}]+)\}\}`)
 )
 
-// Load is atomic: an error never returns a partially loaded catalog.
+// Load 从 dir 目录读取所有 .yaml/.yml 文件（不递归子目录），逐个解码、校验并按分类排序。
+// dir 为空时返回未启用的空 Catalog；dir 必须是绝对路径。
+// 每个文件必须且只能包含一个 YAML 文档，不允许出现未知字段，分类 ID 不能重复。
+// 加载是原子的：只要出错就不会返回部分加载的 Catalog。
 func Load(dir string) (*Catalog, error) {
 	c := &Catalog{Enabled: dir != ""}
 	if dir == "" {
@@ -157,6 +228,8 @@ func Load(dir string) (*Catalog, error) {
 	return c, nil
 }
 
+// ordered 是分类和图表共用的排序比较函数：先按排序权重升序（nil 视为 100），
+// 权重相同时按 ID 的字典序。返回值约定与 strings.Compare 相同。
 func ordered(a *int, aid string, b *int, bid string) int {
 	av, bv := 100, 100
 	if a != nil {
@@ -174,6 +247,8 @@ func ordered(a *int, aid string, b *int, bid string) int {
 	return strings.Compare(aid, bid)
 }
 
+// validate 校验单个配置文件：版本号必须为 1，分类 ID 和标题必填，图表列表非空，
+// 图表 ID 在文件内不重复，并逐个校验图表。校验通过后会就地把 Charts 按 Order、ID 排序。
 func (f *File) validate() error {
 	if f.APIVersion != 1 || !idPattern.MatchString(f.Category.ID) || strings.TrimSpace(f.Category.Title) == "" || len(f.Charts) == 0 {
 		return fmt.Errorf("apiVersion must be 1; category.id, category.title and nonempty charts are required")
@@ -193,6 +268,9 @@ func (f *File) validate() error {
 	return nil
 }
 
+// validate 校验单张图表，并就地填充默认值（Language、Match.Modes、RateWindow、Query.Axis）。
+// 校验内容包括：基本字段、匹配条件、选择器、每条查询模板能否用占位上下文渲染成功、
+// 每个依赖指标都被查询引用、可视化设置与 Y 轴的一致性，以及汇总设置。
 func (c *Chart) validate() error {
 	if !idPattern.MatchString(c.ID) || strings.TrimSpace(c.Title) == "" || strings.TrimSpace(c.Description) == "" {
 		return fmt.Errorf("id, title and description are required")
@@ -318,8 +396,10 @@ func (c *Chart) validate() error {
 	return nil
 }
 
-// Native panel property names remain owned by Grafana, but the envelope must be
-// valid before it reaches the renderer. YAML decoding already validates duplicate keys.
+// validateFieldConfig 校验 Grafana fieldConfig 的外层结构：只允许 defaults（对象）和
+// overrides（列表）；每个 override 必须带非空 matcher.id，properties 中每项必须带非空 id。
+// 面板内部的属性名仍由 Grafana 定义，这里只保证结构在交给渲染器之前是合法的；
+// 重复的键已经在 YAML 解码时被拒绝。config 为 nil 时直接通过。
 func validateFieldConfig(config map[string]any) error {
 	if config == nil {
 		return nil
@@ -369,13 +449,20 @@ func validateFieldConfig(config map[string]any) error {
 	return nil
 }
 
+// Context 是渲染查询模板时的绑定上下文，由调用方根据数据源配置和当前请求提供。
 type Context struct {
-	Labels   map[string]string
+	// Labels 是标签角色到实际标签名的映射（如 "pod" -> "k8s_pod"），用于替换 {{label:角色}}。
+	Labels map[string]string
+	// Selector 根据指标名和额外匹配器生成完整的 metric selector 字符串（含上下文过滤条件），
+	// 用于替换 {{selector:别名}}；返回结果必须能解析为单个 metric selector。
 	Selector func(metric string, matchers []Matcher) (string, error)
 }
 
-// Render parses a template into an AST before binding selectors. Thus a raw selector,
-// a selector hidden in a string, and misplaced/unknown template tokens are rejected.
+// Render 把查询 q 的表达式模板渲染成最终的查询语句，并返回表达式中引用到的指标名（按出现顺序）。
+// 步骤：先替换 {{rateWindow}}、{{label:角色}}，再把每个 {{selector:别名}} 换成内部占位指标名；
+// 然后把表达式解析成 AST，遍历其中的 metric selector，用 ctx.Selector 的结果替换占位符。
+// 因为是先解析成 AST 再绑定选择器，所以原始选择器、藏在字符串里的选择器，
+// 以及位置不对或未知的模板占位符都会被拒绝。
 func (c *Chart) Render(q Query, ctx Context) (string, []string, error) {
 	if strings.Contains(q.Expr, "vmx_config_selector_") {
 		return "", nil, fmt.Errorf("reserved selector placeholder name")
@@ -464,6 +551,8 @@ func (c *Chart) Render(q Query, ctx Context) (string, []string, error) {
 	return string(e.AppendString(nil)), names, nil
 }
 
+// Matches 判断图表在当前数据下是否应当展示：图表未被禁用；metricsql 图表要求数据源支持
+// MetricsQL（supportsMetricsQL）；并且 Match.MetricNames 中的每个指标都在 names 中存在。
 func (c Chart) Matches(names map[string]bool, supportsMetricsQL bool) bool {
 	if c.Enabled != nil && !*c.Enabled || c.Language == "metricsql" && !supportsMetricsQL {
 		return false

@@ -67,6 +67,8 @@ export interface Capabilities {
   maxChartSeries: number;
   maxConcurrentRequests: number;
   knowledgeBaseVersion: string;
+  /** Whether the By Pod view shows the Important Metrics entry (the app's showImportantMetrics setting). */
+  importantMetrics: boolean;
 }
 
 export interface MetricInfo {
@@ -302,7 +304,6 @@ export interface DiagnosticsResponse {
   meta: { requestId: string };
   pluginVersion: string;
   knowledgeBaseVersion: string;
-  upstreamVersion: string;
   healthStatus: string;
   maxMetricNames: number;
   maxSeriesScan: number;
@@ -386,6 +387,7 @@ export async function fetchCapabilities(uid: string): Promise<Capabilities> {
     maxChartSeries: pb.maxChartSeries,
     maxConcurrentRequests: pb.maxConcurrentRequests,
     knowledgeBaseVersion: pb.knowledgeBaseVersion,
+    importantMetrics: pb.importantMetrics,
   };
 }
 
@@ -791,7 +793,6 @@ export async function fetchDiagnostics(uid: string): Promise<DiagnosticsResponse
     meta: { requestId: pb.meta?.requestId ?? '' },
     pluginVersion: pb.pluginVersion,
     knowledgeBaseVersion: pb.knowledgeBaseVersion,
-    upstreamVersion: pb.upstreamVersion,
     healthStatus: pb.healthStatus,
     maxMetricNames: pb.maxMetricNames,
     maxSeriesScan: pb.maxSeriesScan,

@@ -260,15 +260,18 @@ func newHarness(t *testing.T, names []string, series map[string]string, datasour
 	}))
 	t.Cleanup(upstream.Close)
 
-	cfg := vmclient.Config{
-		UID:              "vm",
-		DefaultTimeRange: time.Hour,
-		Credentials: func(context.Context) (string, string, error) {
-			return upstream.URL, "token", nil
-		},
-	}
+	cfg := vmclient.Config{UID: "vm", DefaultTimeRange: time.Hour}
 	if len(datasourceType) > 0 {
 		cfg.DatasourceType = datasourceType[0]
+	}
+	return handlersFor(t, upstream, cfg), calls
+}
+
+// handlersFor returns Handlers whose datasource proxy is upstream.
+func handlersFor(t *testing.T, upstream *httptest.Server, cfg vmclient.Config) *Handlers {
+	t.Helper()
+	cfg.Credentials = func(context.Context) (string, string, error) {
+		return upstream.URL, "token", nil
 	}
 	lim := limits.Default()
 	obs := observability.New("vm")
@@ -281,7 +284,9 @@ func newHarness(t *testing.T, names []string, series map[string]string, datasour
 	c := cache.New(32 << 20)
 	t.Cleanup(c.Close)
 
-	return NewRouter(client, c.Scope(), lim, obs, cfg).handlers, calls
+	router := NewRouter(client, c.Scope(), lim, obs, cfg)
+	t.Cleanup(router.Close)
+	return router.handlers
 }
 
 func TestHandleMetricIndexReturnsHistogramDisplayNameAndQueryMetric(t *testing.T) {

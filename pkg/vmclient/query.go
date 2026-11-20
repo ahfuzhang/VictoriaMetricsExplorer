@@ -56,7 +56,7 @@ func appendQueryEscaped(b []byte, s string) []byte {
 		switch c := s[i]; {
 		case c == ' ':
 			b = append(b, '+')
-		case shouldQueryEscape(c):
+		case shouldQueryEscape(c):  // todo: check byte one by one is too slow.
 			b = append(b, '%', upperHex[c>>4], upperHex[c&0xf])
 		default:
 			b = append(b, c)

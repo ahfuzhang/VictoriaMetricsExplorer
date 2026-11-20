@@ -115,6 +115,9 @@ message CapabilitiesResponse {
   uint32 max_concurrent_requests = 14;
 
   string knowledge_base_version = 15;
+
+  // Whether the By Pod view shows the Important Metrics entry (the app's showImportantMetrics setting).
+  bool important_metrics = 16;
 }
 
 // ============================================================================
@@ -463,7 +466,9 @@ message DiagnosticsResponse {
 
   string plugin_version = 3;
   string knowledge_base_version = 4;
-  string upstream_version = 5;
+  // Was upstream_version; VictoriaMetrics' buildinfo reports a fixed Prometheus version, so it said nothing.
+  reserved 5;
+  reserved "upstream_version";
   string health_status = 6;
 
   uint32 max_metric_names = 7;

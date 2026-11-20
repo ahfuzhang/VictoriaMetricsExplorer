@@ -236,10 +236,34 @@ func (c *Client) Do(ctx context.Context, method, apiPath string, query []byte, b
 	return resp, nil
 }
 
+// doOK executes a request and returns the response when its status is 200; the caller reads
+// the body, at most c.limits.MaxUpstreamBytes of it, and closes it. Any other status is read,
+// up to that limit, into an *UpstreamError.
+func (c *Client) doOK(ctx context.Context, method, apiPath string, query []byte) (*http.Response, error) {
+	resp, err := c.Do(ctx, method, apiPath, query, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusOK {
+		return resp, nil
+	}
+	defer resp.Body.Close()
+	maxBytes := int64(c.limits.MaxUpstreamBytes)
+	body, err := bytesutil.ReadAll(io.LimitReader(resp.Body, maxBytes), min(resp.ContentLength, maxBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	return nil, &UpstreamError{
+		StatusCode: resp.StatusCode,
+		Body:       TruncateBody(body, 512),
+		Path:       apiPath,
+	}
+}
+
 // doJSON is a helper that executes a request and decodes the JSON response
 // with a size limit.
 func (c *Client) doJSON(ctx context.Context, method, apiPath string, query []byte, target interface{}) error {
-	resp, err := c.Do(ctx, method, apiPath, query, nil)
+	resp, err := c.doOK(ctx, method, apiPath, query)
 	if err != nil {
 		return err
 	}
@@ -250,14 +274,6 @@ func (c *Client) doJSON(ctx context.Context, method, apiPath string, query []byt
 	body, err := bytesutil.ReadAll(io.LimitReader(resp.Body, maxBytes), min(resp.ContentLength, maxBytes))
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return &UpstreamError{
-			StatusCode: resp.StatusCode,
-			Body:       TruncateBody(body, 512),
-			Path:       apiPath,
-		}
 	}
 	// todo: 考虑用 fastjson 来提升性能
 	if err := json.Unmarshal(body, target); err != nil {
@@ -339,13 +355,6 @@ type labelValuesResponse struct {
 	Error     string   `json:"error"`
 }
 
-// labelsResponse is the JSON response from /api/v1/labels
-type labelsResponse struct {
-	Status    string   `json:"status"`
-	Data      []string `json:"data"`
-	IsPartial bool     `json:"isPartial"`
-}
-
 // seriesResponse is the JSON response from /api/v1/series
 type seriesResponse struct {
 	Status    string              `json:"status"`
@@ -380,7 +389,7 @@ func (c *Client) LabelValues(ctx context.Context, label string, matches []string
 	return resp.Data, resp.IsPartial, nil
 }
 
-// seriesQuery is the query string of the label, label-values and series APIs: the match[]
+// seriesQuery is the query string of the label-values and series APIs: the match[]
 // selectors, the range when both ends are set, and the limit when positive.
 func seriesQuery(matches []string, start, end time.Time, limit int) []byte {
 	withRange := !start.IsZero() && !end.IsZero()
@@ -406,18 +415,6 @@ func seriesQuery(matches []string, start, end time.Time, limit int) []byte {
 		q = appendIntParam(q, "limit", int64(limit))
 	}
 	return q
-}
-
-// Labels returns all label names.
-func (c *Client) Labels(ctx context.Context, start, end time.Time, limit int) ([]string, bool, error) {
-	var resp labelsResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/labels", seriesQuery(nil, start, end, limit), &resp); err != nil {
-		return nil, false, err
-	}
-	if resp.Status != "success" {
-		return nil, resp.IsPartial, fmt.Errorf("upstream status: %s", resp.Status)
-	}
-	return resp.Data, resp.IsPartial, nil
 }
 
 // Series returns series matching the given match[] selectors.
@@ -480,36 +477,4 @@ func (c *Client) Query(ctx context.Context, query string, t time.Time) (jsontext
 		return nil, fmt.Errorf("upstream status: %s", resp.Status)
 	}
 	return resp.Data, nil
-}
-
-// getUpstreamVersion tries to fetch the upstream version from the buildinfo endpoint.
-func (c *Client) getUpstreamVersion(ctx context.Context) string {
-	resp, err := c.Do(ctx, http.MethodGet, "/api/v1/status/buildinfo", nil, nil)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	const maxBytes = 4096
-	body, err := bytesutil.ReadAll(io.LimitReader(resp.Body, maxBytes), min(resp.ContentLength, maxBytes))
-	if err != nil {
-		return ""
-	}
-	var info struct {
-		Data struct {
-			Version string `json:"version"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &info); err != nil {
-		return ""
-	}
-	return info.Data.Version
-}
-
-// GetUpstreamVersionPublic tries to fetch the upstream version.
-// Returns empty string if unavailable.
-func (c *Client) GetUpstreamVersionPublic(ctx context.Context) string {
-	return c.getUpstreamVersion(ctx)
 }

@@ -21,6 +21,7 @@ import (
 
 // Router routes Resource API requests to the appropriate handler.
 type Router struct {
+	// metricCatalog is nil when Important Metrics is hidden (the app's showImportantMetrics setting).
 	metricCatalog *metricconfig.Catalog
 	client        *vmclient.Client
 	cache         *cache.Scope
@@ -30,7 +31,8 @@ type Router struct {
 	handlers      *Handlers
 }
 
-// SetMetricCatalog binds the immutable startup snapshot before requests are served.
+// SetMetricCatalog binds the immutable startup snapshot before requests are served. A nil catalog
+// hides Important Metrics: capabilities report it off and configured-charts returns it disabled.
 func (r *Router) SetMetricCatalog(c *metricconfig.Catalog) { r.metricCatalog = c }
 
 // NewRouter creates a new Resource API router. cacheScope is the datasource's share of the app's
@@ -45,6 +47,11 @@ func NewRouter(client *vmclient.Client, cacheScope *cache.Scope, lim *limits.Lim
 	}
 	r.handlers = NewHandlers(r)
 	return r
+}
+
+// Close stops the router's background work: the pod-groups refresh and the fetches it runs.
+func (r *Router) Close() {
+	r.handlers.podGroups.close()
 }
 
 // HTTPHandler returns the Resource API routes as a plain http.Handler, so an app can mount

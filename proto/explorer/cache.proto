@@ -39,6 +39,11 @@ message MetricIndexCacheEntry {
   bool partial = 2;
 }
 
+// LabelMappingsCacheEntry is the label each role (pod, namespace, node, cluster) was detected as.
+message LabelMappingsCacheEntry {
+  repeated LabelMapping mappings = 1;
+}
+
 // MetricTypeCacheEntry is the inferred type of one metric.
 message MetricTypeCacheEntry {
   string type = 1;   // counter, gauge, histogram, stat_value

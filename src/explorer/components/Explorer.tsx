@@ -164,6 +164,8 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
   const [selectedMetric, setSelectedMetric] = useState('');
   const [byPodMode, setByPodMode] = useState(false);
   const [importantMetricsSelected, setImportantMetricsSelected] = useState(false);
+  // The entry exists only in By Pod mode, and only when the app's showImportantMetrics is on.
+  const showImportantMetrics = byPodMode && capabilities.importantMetrics;
   const [filters, setFilters] = useState<SelectedFilters>({});
   // Labels the chart is summed by, picked under it from the labels the filters leave groupable.
   const [groupBy, setGroupBy] = useState<string[]>([]);
@@ -484,7 +486,7 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
           timeRange={timeRange}
           refreshKey={refreshKey}
           onSelectMetric={handleMetricSelect}
-          showImportantMetrics={byPodMode}
+          showImportantMetrics={showImportantMetrics}
           importantMetricsSelected={importantMetricsSelected}
           onSelectImportantMetrics={() => setImportantMetricsSelected(true)}
         />
@@ -623,7 +625,7 @@ export const Explorer: React.FC<Props> = ({ datasourceUID, capabilities, timeRan
 
         {separator(0)}
 
-        {savedMode ? savedColumns : importantMetricsSelected && byPodMode ? importantColumns : browseColumns}
+        {savedMode ? savedColumns : importantMetricsSelected && showImportantMetrics ? importantColumns : browseColumns}
       </div>
     </div>
   );

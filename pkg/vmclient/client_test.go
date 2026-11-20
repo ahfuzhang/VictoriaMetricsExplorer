@@ -152,7 +152,7 @@ func TestUpstreamErrorHints(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			_, _, err := newClient(t, srv.URL, "t").Labels(context.Background(), time.Time{}, time.Time{}, 0)
+			_, _, err := newClient(t, srv.URL, "t").Series(context.Background(), nil, time.Time{}, time.Time{}, 0)
 			var ue *UpstreamError
 			if !errors.As(err, &ue) || ue.StatusCode != tt.status {
 				t.Fatalf("expected UpstreamError %d, got %v", tt.status, err)
@@ -160,7 +160,7 @@ func TestUpstreamErrorHints(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.hint) {
 				t.Fatalf("error %q should mention %q", err, tt.hint)
 			}
-			if !strings.Contains(err.Error(), "/api/v1/labels") || !strings.Contains(err.Error(), "nope") {
+			if !strings.Contains(err.Error(), "/api/v1/series") || !strings.Contains(err.Error(), "nope") {
 				t.Fatalf("error %q should name the failing upstream path and carry the response body", err)
 			}
 		})
@@ -175,7 +175,7 @@ func TestMissingServiceAccountIsReported(t *testing.T) {
 	}
 	defer c.Close()
 
-	_, _, err = c.Labels(context.Background(), time.Time{}, time.Time{}, 0)
+	_, _, err = c.Series(context.Background(), nil, time.Time{}, time.Time{}, 0)
 	if !errors.Is(err, ErrNoServiceAccount) {
 		t.Fatalf("expected ErrNoServiceAccount, got %v", err)
 	}
@@ -197,7 +197,7 @@ func TestRedirectToAnotherHostIsBlocked(t *testing.T) {
 	}))
 	defer grafana.Close()
 
-	_, _, err := newClient(t, grafana.URL, "t").Labels(context.Background(), time.Time{}, time.Time{}, 0)
+	_, _, err := newClient(t, grafana.URL, "t").Series(context.Background(), nil, time.Time{}, time.Time{}, 0)
 	if err == nil {
 		t.Fatal("expected the cross-host redirect to fail")
 	}

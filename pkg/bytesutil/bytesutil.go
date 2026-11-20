@@ -5,6 +5,7 @@ package bytesutil
 
 import (
 	"io"
+	"slices"
 	"unsafe"
 )
 
@@ -32,19 +33,29 @@ func ReadAll(r io.Reader, size int64) ([]byte, error) {
 		return io.ReadAll(r)
 	}
 	// The spare byte lets the read that finds the end of r happen without growing the buffer.
-	b := make([]byte, 0, size+1)
+	return AppendAll(make([]byte, 0, size+1), r, size)
+}
+
+// AppendAll reads r to its end and appends what it read to dst, reusing dst's memory. When
+// size >= 0 (an HTTP Content-Length) dst grows at most once, to fit it; a negative size grows
+// dst as needed.
+func AppendAll(dst []byte, r io.Reader, size int64) ([]byte, error) {
+	if size >= 0 {
+		// The spare byte lets the read that finds the end of r happen without growing dst.
+		dst = slices.Grow(dst, int(size)+1)
+	}
 	for {
-		n, err := r.Read(b[len(b):cap(b)])
-		b = b[:len(b)+n]
+		if len(dst) == cap(dst) {
+			// r holds more than size said, or size is unknown.
+			dst = slices.Grow(dst, 512)
+		}
+		n, err := r.Read(dst[len(dst):cap(dst)])
+		dst = dst[:len(dst)+n]
 		if err == io.EOF {
-			return b, nil
+			return dst, nil
 		}
 		if err != nil {
-			return b, err
-		}
-		if len(b) == cap(b) {
-			// r holds more than size said.
-			b = append(b, 0)[:len(b)]
+			return dst, err
 		}
 	}
 }

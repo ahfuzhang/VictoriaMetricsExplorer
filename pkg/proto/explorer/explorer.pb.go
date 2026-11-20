@@ -735,8 +735,10 @@ type CapabilitiesResponse struct {
 	MaxChartSeries        uint32 `protobuf:"varint,13,opt,name=max_chart_series,json=maxChartSeries,proto3" json:"max_chart_series,omitempty"`
 	MaxConcurrentRequests uint32 `protobuf:"varint,14,opt,name=max_concurrent_requests,json=maxConcurrentRequests,proto3" json:"max_concurrent_requests,omitempty"`
 	KnowledgeBaseVersion  string `protobuf:"bytes,15,opt,name=knowledge_base_version,json=knowledgeBaseVersion,proto3" json:"knowledge_base_version,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Whether the By Pod view shows the Important Metrics entry (the app's showImportantMetrics setting).
+	ImportantMetrics bool `protobuf:"varint,16,opt,name=important_metrics,json=importantMetrics,proto3" json:"important_metrics,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CapabilitiesResponse) Reset() {
@@ -851,6 +853,13 @@ func (x *CapabilitiesResponse) GetKnowledgeBaseVersion() string {
 		return x.KnowledgeBaseVersion
 	}
 	return ""
+}
+
+func (x *CapabilitiesResponse) GetImportantMetrics() bool {
+	if x != nil {
+		return x.ImportantMetrics
+	}
+	return false
 }
 
 type MetricIndexRequest struct {
@@ -3250,7 +3259,6 @@ type DiagnosticsResponse struct {
 	Meta                 *ResponseMeta          `protobuf:"bytes,2,opt,name=meta,proto3" json:"meta,omitempty"`
 	PluginVersion        string                 `protobuf:"bytes,3,opt,name=plugin_version,json=pluginVersion,proto3" json:"plugin_version,omitempty"`
 	KnowledgeBaseVersion string                 `protobuf:"bytes,4,opt,name=knowledge_base_version,json=knowledgeBaseVersion,proto3" json:"knowledge_base_version,omitempty"`
-	UpstreamVersion      string                 `protobuf:"bytes,5,opt,name=upstream_version,json=upstreamVersion,proto3" json:"upstream_version,omitempty"`
 	HealthStatus         string                 `protobuf:"bytes,6,opt,name=health_status,json=healthStatus,proto3" json:"health_status,omitempty"`
 	MaxMetricNames       uint32                 `protobuf:"varint,7,opt,name=max_metric_names,json=maxMetricNames,proto3" json:"max_metric_names,omitempty"`
 	MaxSeriesScan        uint32                 `protobuf:"varint,8,opt,name=max_series_scan,json=maxSeriesScan,proto3" json:"max_series_scan,omitempty"`
@@ -3324,13 +3332,6 @@ func (x *DiagnosticsResponse) GetPluginVersion() string {
 func (x *DiagnosticsResponse) GetKnowledgeBaseVersion() string {
 	if x != nil {
 		return x.KnowledgeBaseVersion
-	}
-	return ""
-}
-
-func (x *DiagnosticsResponse) GetUpstreamVersion() string {
-	if x != nil {
-		return x.UpstreamVersion
 	}
 	return ""
 }
@@ -3715,7 +3716,7 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\n" +
 	"confidence\x18\x03 \x01(\x02R\n" +
 	"confidence\x12\x1a\n" +
-	"\bdetected\x18\x04 \x01(\bR\bdetected\"\xf4\x04\n" +
+	"\bdetected\x18\x04 \x01(\bR\bdetected\"\xa1\x05\n" +
 	"\x14CapabilitiesResponse\x12/\n" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12)\n" +
@@ -3729,7 +3730,8 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\x10max_facet_values\x18\f \x01(\rR\x0emaxFacetValues\x12(\n" +
 	"\x10max_chart_series\x18\r \x01(\rR\x0emaxChartSeries\x126\n" +
 	"\x17max_concurrent_requests\x18\x0e \x01(\rR\x15maxConcurrentRequests\x124\n" +
-	"\x16knowledge_base_version\x18\x0f \x01(\tR\x14knowledgeBaseVersionJ\x04\b\x03\x10\x04R\x10upstream_version\"\xb1\x02\n" +
+	"\x16knowledge_base_version\x18\x0f \x01(\tR\x14knowledgeBaseVersion\x12+\n" +
+	"\x11important_metrics\x18\x10 \x01(\bR\x10importantMetricsJ\x04\b\x03\x10\x04R\x10upstream_version\"\xb1\x02\n" +
 	"\x12MetricIndexRequest\x12)\n" +
 	"\x05range\x18\x01 \x01(\v2\x13.explorer.TimeRangeR\x05range\x12\x16\n" +
 	"\x06search\x18\x02 \x01(\tR\x06search\x122\n" +
@@ -3947,13 +3949,12 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12,\n" +
 	"\x06series\x18\x03 \x03(\v2\x14.explorer.TimeSeriesR\x06series\x12\x12\n" +
-	"\x04step\x18\x04 \x01(\tR\x04step\"\xc7\a\n" +
+	"\x04step\x18\x04 \x01(\tR\x04step\"\xb4\a\n" +
 	"\x13DiagnosticsResponse\x12/\n" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12%\n" +
 	"\x0eplugin_version\x18\x03 \x01(\tR\rpluginVersion\x124\n" +
-	"\x16knowledge_base_version\x18\x04 \x01(\tR\x14knowledgeBaseVersion\x12)\n" +
-	"\x10upstream_version\x18\x05 \x01(\tR\x0fupstreamVersion\x12#\n" +
+	"\x16knowledge_base_version\x18\x04 \x01(\tR\x14knowledgeBaseVersion\x12#\n" +
 	"\rhealth_status\x18\x06 \x01(\tR\fhealthStatus\x12(\n" +
 	"\x10max_metric_names\x18\a \x01(\rR\x0emaxMetricNames\x12&\n" +
 	"\x0fmax_series_scan\x18\b \x01(\rR\rmaxSeriesScan\x12(\n" +
@@ -3974,7 +3975,7 @@ const file_explorer_explorer_proto_rawDesc = "" +
 	"\x17avg_upstream_latency_ms\x18\x14 \x01(\x01R\x14avgUpstreamLatencyMs\x1a>\n" +
 	"\x10ErrorCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\xe5\x02\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01J\x04\b\x05\x10\x06R\x10upstream_version\"\xe5\x02\n" +
 	"\x12CacheStatsResponse\x12/\n" +
 	"\x06schema\x18\x01 \x01(\v2\x17.explorer.SchemaVersionR\x06schema\x12*\n" +
 	"\x04meta\x18\x02 \x01(\v2\x16.explorer.ResponseMetaR\x04meta\x12\x18\n" +

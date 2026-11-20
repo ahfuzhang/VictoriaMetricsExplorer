@@ -100,7 +100,7 @@ func TestLoadDirectoryRules(t *testing.T) {
 }
 
 func TestImportedDashboard(t *testing.T) {
-	dir, err := filepath.Abs("../../config/metrics")
+	dir, err := filepath.Abs("../../provisioning/plugins/config/metrics")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -456,8 +456,8 @@ func TestCacheKey(t *testing.T) {
 	if CacheKey("ab", "c") == CacheKey("a", "bc") {
 		t.Fatal("moving a byte between parts should change the key")
 	}
-	if len(key1) != 64 {
-		t.Fatalf("key length = %d, want 64 hex digits", len(key1))
+	if len(key1) != 32 {
+		t.Fatalf("key length = %d, want the 32 bytes of a SHA-256", len(key1))
 	}
 }
 

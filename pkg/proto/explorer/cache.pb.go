@@ -261,6 +261,51 @@ func (x *MetricIndexCacheEntry) GetPartial() bool {
 	return false
 }
 
+// LabelMappingsCacheEntry is the label each role (pod, namespace, node, cluster) was detected as.
+type LabelMappingsCacheEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mappings      []*LabelMapping        `protobuf:"bytes,1,rep,name=mappings,proto3" json:"mappings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LabelMappingsCacheEntry) Reset() {
+	*x = LabelMappingsCacheEntry{}
+	mi := &file_explorer_cache_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LabelMappingsCacheEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LabelMappingsCacheEntry) ProtoMessage() {}
+
+func (x *LabelMappingsCacheEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_explorer_cache_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LabelMappingsCacheEntry.ProtoReflect.Descriptor instead.
+func (*LabelMappingsCacheEntry) Descriptor() ([]byte, []int) {
+	return file_explorer_cache_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *LabelMappingsCacheEntry) GetMappings() []*LabelMapping {
+	if x != nil {
+		return x.Mappings
+	}
+	return nil
+}
+
 // MetricTypeCacheEntry is the inferred type of one metric.
 type MetricTypeCacheEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -272,7 +317,7 @@ type MetricTypeCacheEntry struct {
 
 func (x *MetricTypeCacheEntry) Reset() {
 	*x = MetricTypeCacheEntry{}
-	mi := &file_explorer_cache_proto_msgTypes[4]
+	mi := &file_explorer_cache_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -284,7 +329,7 @@ func (x *MetricTypeCacheEntry) String() string {
 func (*MetricTypeCacheEntry) ProtoMessage() {}
 
 func (x *MetricTypeCacheEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_explorer_cache_proto_msgTypes[4]
+	mi := &file_explorer_cache_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -297,7 +342,7 @@ func (x *MetricTypeCacheEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricTypeCacheEntry.ProtoReflect.Descriptor instead.
 func (*MetricTypeCacheEntry) Descriptor() ([]byte, []int) {
-	return file_explorer_cache_proto_rawDescGZIP(), []int{4}
+	return file_explorer_cache_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *MetricTypeCacheEntry) GetType() string {
@@ -334,7 +379,9 @@ const file_explorer_cache_proto_rawDesc = "" +
 	"\apartial\x18\x03 \x01(\bR\apartial\"a\n" +
 	"\x15MetricIndexCacheEntry\x12.\n" +
 	"\ametrics\x18\x01 \x03(\v2\x14.explorer.MetricInfoR\ametrics\x12\x18\n" +
-	"\apartial\x18\x02 \x01(\bR\apartial\">\n" +
+	"\apartial\x18\x02 \x01(\bR\apartial\"M\n" +
+	"\x17LabelMappingsCacheEntry\x122\n" +
+	"\bmappings\x18\x01 \x03(\v2\x16.explorer.LabelMappingR\bmappings\">\n" +
 	"\x14MetricTypeCacheEntry\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
 	"\x04zero\x18\x02 \x01(\bR\x04zeroBLZJgithub.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer;explorerpbb\x06proto3"
@@ -351,24 +398,27 @@ func file_explorer_cache_proto_rawDescGZIP() []byte {
 	return file_explorer_cache_proto_rawDescData
 }
 
-var file_explorer_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_explorer_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_explorer_cache_proto_goTypes = []any{
-	(*CacheValue)(nil),            // 0: explorer.CacheValue
-	(*PodGroupsCacheEntry)(nil),   // 1: explorer.PodGroupsCacheEntry
-	(*NodeGroupsCacheEntry)(nil),  // 2: explorer.NodeGroupsCacheEntry
-	(*MetricIndexCacheEntry)(nil), // 3: explorer.MetricIndexCacheEntry
-	(*MetricTypeCacheEntry)(nil),  // 4: explorer.MetricTypeCacheEntry
-	(*PodGroup)(nil),              // 5: explorer.PodGroup
-	(*MetricInfo)(nil),            // 6: explorer.MetricInfo
+	(*CacheValue)(nil),              // 0: explorer.CacheValue
+	(*PodGroupsCacheEntry)(nil),     // 1: explorer.PodGroupsCacheEntry
+	(*NodeGroupsCacheEntry)(nil),    // 2: explorer.NodeGroupsCacheEntry
+	(*MetricIndexCacheEntry)(nil),   // 3: explorer.MetricIndexCacheEntry
+	(*LabelMappingsCacheEntry)(nil), // 4: explorer.LabelMappingsCacheEntry
+	(*MetricTypeCacheEntry)(nil),    // 5: explorer.MetricTypeCacheEntry
+	(*PodGroup)(nil),                // 6: explorer.PodGroup
+	(*MetricInfo)(nil),              // 7: explorer.MetricInfo
+	(*LabelMapping)(nil),            // 8: explorer.LabelMapping
 }
 var file_explorer_cache_proto_depIdxs = []int32{
-	5, // 0: explorer.PodGroupsCacheEntry.groups:type_name -> explorer.PodGroup
-	6, // 1: explorer.MetricIndexCacheEntry.metrics:type_name -> explorer.MetricInfo
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	6, // 0: explorer.PodGroupsCacheEntry.groups:type_name -> explorer.PodGroup
+	7, // 1: explorer.MetricIndexCacheEntry.metrics:type_name -> explorer.MetricInfo
+	8, // 2: explorer.LabelMappingsCacheEntry.mappings:type_name -> explorer.LabelMapping
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_explorer_cache_proto_init() }
@@ -383,7 +433,7 @@ func file_explorer_cache_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_explorer_cache_proto_rawDesc), len(file_explorer_cache_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

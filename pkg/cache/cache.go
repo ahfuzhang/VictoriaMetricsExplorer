@@ -10,7 +10,6 @@ package cache
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"sync/atomic"
@@ -253,12 +252,11 @@ func AppendKeyBool(b []byte, v bool) []byte {
 	return append(strconv.AppendBool(b, v), keySeparator)
 }
 
-// HashKey returns the cache key for the key bytes b: their SHA-256, in hex.
+// HashKey returns the cache key for the key bytes b: their raw 32-byte SHA-256. The key is binary,
+// which fastcache accepts; it is only ever handed to a Scope, never logged or sent anywhere.
 func HashKey(b []byte) string {
 	sum := sha256.Sum256(b)
-	dst := make([]byte, hex.EncodedLen(len(sum)))
-	hex.Encode(dst, sum[:])
-	return bytesutil.ToUnsafeString(dst)
+	return string(sum[:])
 }
 
 // CacheKey builds a cache key from the security context and parameters.

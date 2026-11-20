@@ -21,6 +21,7 @@ import (
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/bytesutil"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/cache"
 	explorerpb "github.com/ahfuzhang/victoriametricsexplorer/pkg/proto/explorer"
+	"github.com/ahfuzhang/victoriametricsexplorer/pkg/vmclient"
 	"github.com/ahfuzhang/victoriametricsexplorer/pkg/wire"
 )
 
@@ -39,11 +40,15 @@ type Handlers struct {
 	// indexMu serializes metric-types' updates of cached metric-index lists, so concurrent
 	// updates of one list never drop each other's results.
 	indexMu sync.Mutex
+	// podGroups fetches pod groups and keeps them fresh in the cache.
+	podGroups *podGroupsRefresher
 }
 
 // NewHandlers creates a new Handlers instance.
 func NewHandlers(r *Router) *Handlers {
-	return &Handlers{router: r, typeSem: make(chan struct{}, metricTypeConcurrency)}
+	h := &Handlers{router: r, typeSem: make(chan struct{}, metricTypeConcurrency)}
+	h.podGroups = newPodGroupsRefresher(h)
+	return h
 }
 
 // ============================================================================
@@ -120,66 +125,158 @@ func (h *Handlers) buildCapabilitiesResponse(ctx context.Context, requestID stri
 		MaxChartSeries:        uint32(lim.MaxChartSeries),
 		MaxConcurrentRequests: uint32(lim.MaxConcurrentRequests),
 		KnowledgeBaseVersion:  "0.1.0",
+		ImportantMetrics:      h.router.metricCatalog != nil,
 	}, nil
 }
 
-func (h *Handlers) detectLabelMappings(ctx context.Context) ([]*explorerpb.LabelMapping, error) {
-	settings := h.router.config
+// labelRoles are the roles detectLabelMappings reports, each with the label names tried after the
+// configured one.
+var labelRoles = [...]struct {
+	role       string
+	candidates []string
+}{
+	{"pod", []string{"pod", "pod_name", "kubernetes_pod_name"}},
+	{"namespace", []string{"namespace", "kubernetes_namespace"}},
+	{"node", []string{"node", "instance", "kubernetes_node"}},
+	{"cluster", []string{"cluster", "cluster_name"}},
+}
 
-	// Try to detect if these labels exist in the data source
-	detected, _, err := h.router.client.Labels(ctx, time.Time{}, time.Time{}, 1000)
+const (
+	// labelMappingsCacheTTL is how long detected label mappings are cached. Which label names a
+	// datasource has rarely changes, and capabilities, rebuilt every capabilitiesCacheTTL, reuses
+	// them.
+	labelMappingsCacheTTL = 30 * time.Minute
+	// labelNamesLimit caps the label names list label detection reads. A list this long may have
+	// been cut (Prometheus keeps the alphabetically first names), so the names it lacks are then
+	// asked about one by one.
+	labelNamesLimit = 10000
+)
+
+// detectLabelMappings returns, for each role, the configured label or else the first of its usual
+// alternatives the datasource has, from the cache when it can. A failure fails the detection, so
+// this stays the connectivity check; failures and partial answers are not cached.
+func (h *Handlers) detectLabelMappings(ctx context.Context) ([]*explorerpb.LabelMapping, error) {
+	cfg := &h.router.config
+	// The fingerprint covers the configured labels, so reconfiguring them misses the cache.
+	key := cache.CacheKey("label-mappings-v1", cfg.UID, cfg.ConfigFingerprint)
+	var entry explorerpb.LabelMappingsCacheEntry
+	if h.router.cache.Get(key, labelMappingsCacheTTL, &entry) {
+		return entry.Mappings, nil
+	}
+	mappings, partial, err := h.findLabelMappings(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	labelSet := make(map[string]bool)
-	for _, l := range detected {
-		labelSet[l] = true
-	}
-
-	mappings := []*explorerpb.LabelMapping{}
-	for _, role := range []string{"pod", "namespace", "node", "cluster"} {
-		var labelName string
-		var candidates []string
-		switch role {
-		case "pod":
-			labelName = settings.PodLabel
-			candidates = []string{"pod", "pod_name", "kubernetes_pod_name"}
-		case "namespace":
-			labelName = settings.NamespaceLabel
-			candidates = []string{"namespace", "kubernetes_namespace"}
-		case "node":
-			labelName = settings.NodeLabel
-			candidates = []string{"node", "instance", "kubernetes_node"}
-		case "cluster":
-			labelName = settings.ClusterLabel
-			candidates = []string{"cluster", "cluster_name"}
-		}
-
-		isDetected := labelSet[labelName]
-		if !isDetected {
-			for _, c := range candidates {
-				if labelSet[c] {
-					labelName = c
-					isDetected = true
-					break
-				}
-			}
-		}
-
-		var confidence float32
-		if isDetected {
-			confidence = 1.0
-		}
-
-		mappings = append(mappings, &explorerpb.LabelMapping{
-			Role:       role,
-			LabelName:  labelName,
-			Confidence: confidence,
-			Detected:   isDetected,
-		})
+	if !partial {
+		entry.Mappings = mappings
+		h.router.cache.Set(key, &entry)
 	}
 	return mappings, nil
+}
+
+// labelCandidate is a label name a role tries, and whether the datasource's label names list has it.
+type labelCandidate struct {
+	name  string
+	found bool
+}
+
+// findLabelMappings detects the label mappings with one request: the datasource's label names, read
+// from the index without touching any series, are checked against the names every role tries. Only
+// when that list may have been cut (it reached labelNamesLimit) are the names it lacks asked about
+// one by one. The bool reports that the datasource answered partially.
+func (h *Handlers) findLabelMappings(ctx context.Context) ([]*explorerpb.LabelMapping, bool, error) {
+	cfg := &h.router.config
+	configured := [len(labelRoles)]string{cfg.PodLabel, cfg.NamespaceLabel, cfg.NodeLabel, cfg.ClusterLabel}
+
+	// The names each role tries, in order: its configured label, then its alternatives. Role i's are
+	// tries[bounds[i]:bounds[i+1]]. A name that is not a valid label name exists nowhere and is left
+	// out.
+	n := 0
+	for i := range labelRoles {
+		n += 1 + len(labelRoles[i].candidates)
+	}
+	tries := make([]labelCandidate, 0, n)
+	var bounds [len(labelRoles) + 1]int
+	for i := range labelRoles {
+		if promLabelNamePattern.MatchString(configured[i]) {
+			tries = append(tries, labelCandidate{name: configured[i]})
+		}
+		for _, c := range labelRoles[i].candidates {
+			if c != configured[i] {
+				tries = append(tries, labelCandidate{name: c})
+			}
+		}
+		bounds[i+1] = len(tries)
+	}
+
+	names, partial, err := h.router.client.LabelNamesArray(ctx, nil, time.Time{}, time.Time{}, labelNamesLimit)
+	if err != nil {
+		return nil, false, err
+	}
+	count := names.Len()
+	for i := range count {
+		name := names.Get(i)
+		// More than one role can try a name, so every match is marked.
+		for j := range tries {
+			if tries[j].name == name {
+				tries[j].found = true
+			}
+		}
+	}
+	vmclient.PutStringArray(names)
+	cut := count >= labelNamesLimit
+
+	var rows [len(labelRoles)]explorerpb.LabelMapping
+	var errs [len(labelRoles)]error
+	var wg sync.WaitGroup
+	for i := range labelRoles {
+		m := &rows[i]
+		m.Role, m.LabelName = labelRoles[i].role, configured[i]
+		pick := func() { errs[i] = h.pickLabel(ctx, m, tries[bounds[i]:bounds[i+1]], cut) }
+		if cut {
+			// The roles ask about the names missing from the list in parallel.
+			wg.Go(pick)
+		} else {
+			pick()
+		}
+	}
+	wg.Wait()
+
+	mappings := make([]*explorerpb.LabelMapping, len(rows))
+	for i := range rows {
+		if errs[i] != nil {
+			return nil, false, errs[i]
+		}
+		mappings[i] = &rows[i]
+	}
+	return mappings, partial, nil
+}
+
+// pickLabel sets m to the first of tries the datasource has, and leaves it as it is when the
+// datasource has none of them. With cut, a name missing from the label names list may still exist,
+// so it is asked about before the next one is tried; otherwise no request is made.
+func (h *Handlers) pickLabel(ctx context.Context, m *explorerpb.LabelMapping, tries []labelCandidate, cut bool) error {
+	for _, t := range tries {
+		found := t.found
+		if !found && cut {
+			var err error
+			if found, err = h.labelExists(ctx, t.name); err != nil {
+				return err
+			}
+		}
+		if found {
+			m.LabelName, m.Detected, m.Confidence = t.name, true, 1
+			return nil
+		}
+	}
+	return nil
+}
+
+// labelExists reports whether the datasource has a series carrying label, by asking for at most
+// one of its values. label must be a valid label name.
+func (h *Handlers) labelExists(ctx context.Context, label string) (bool, error) {
+	values, _, err := h.router.client.LabelValues(ctx, label, nil, time.Time{}, time.Time{}, 1)
+	return len(values) > 0, err
 }
 
 // ============================================================================
@@ -1720,7 +1817,6 @@ func (h *Handlers) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		Meta:                 &explorerpb.ResponseMeta{RequestId: requestID},
 		PluginVersion:        "0.1.0",
 		KnowledgeBaseVersion: "0.1.0",
-		UpstreamVersion:      h.router.client.GetUpstreamVersionPublic(r.Context()),
 		HealthStatus:         "ok",
 		MaxMetricNames:       uint32(h.router.limits.MaxMetricNames),
 		MaxSeriesScan:        uint32(h.router.limits.MaxSeriesScan),
